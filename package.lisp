@@ -1,6 +1,7 @@
 ;;; -*- Lisp -*-
 
 (defpackage "GEMINI"
+  (:shadow "GET-PROPERTIES")
   (:shadowing-import-from "FUNCTION" "COMPOSE")
   (:shadowing-import-from "NAMED-LET" "LET" "NAMED-LAMBDA")
   (:shadowing-import-from "SERIES" "DEFUN" "FUNCALL" "LET*" "MULTIPLE-VALUE-BIND")
@@ -52,6 +53,6 @@
    "PART"
    "SINGLETON-LIST-OF-CANDIDATES?"
    "SINGLETON-LIST-OF-PARTS?"
-   "TEXT-OBJECT?"
-   "THOUGHT?"
+   "TEXT-PART?"
+   "THOUGHT-PART?"
    ))
