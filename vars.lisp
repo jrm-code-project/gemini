@@ -389,6 +389,14 @@
   "Holds the conversation history as a list of content objects.
    This is used to maintain context across multiple API calls.")
 
+(defparameter *prior-history* '()
+  "Holds the prior conversation history as a list of content objects.
+   This is used to maintain context across multiple API calls, especially for multi-turn conversations.")
+
 (defvar *model*)
 (eval-when (:compile-toplevel :load-toplevel :execute)
   (setf (documentation '*model* 'variable) "Holds the model name or identifier for the API."))
+
+(defparameter *prior-model* nil
+  "Holds the prior model name or identifier for the API.
+   This is used to maintain context across multiple API calls, especially for multi-turn conversations.")

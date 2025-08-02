@@ -69,17 +69,17 @@
   (decode-schema-type-enum (%get-type schema)))
 
 (deff blob?
-    (is-object-test '(:data :mime-type) '(:data :mime-type))
+    (is-object-test '(:data :mime-type))
     "Predicate to check if a thing is a valid blob object (inline data).")
 
 (deff candidate?
-    (is-object-test '(:content) '(:content :finish-reason :index))
+    (is-object-test '(:content) '(:finish-reason :index))
     "Predicate to check if a thing is a valid candidate object from the API response.")
 
 (deff singleton-list-of-candidates? (singleton-list-of-test #'candidate?))
 
 (deff content?
-    (is-object-test '(:parts) '(:parts :role))
+    (is-object-test '(:parts) '(:role))
     "Predicate to check if a thing is a valid content object.")
 
 (deff list-of-content? (list-of-test #'content?)
@@ -89,28 +89,28 @@
     "Predicate to check if a thing is a singleton list of a content object.")
 
 (deff function-call?
-  (is-object-test '(:name) '(:args :id :name))
+  (is-object-test '(:name) '(:args :id))
     "Predicate to check if a thing is a valid function call.")
 
 (deff function-response?
   (is-object-test '(:name :response)
-                  '(:id :name :response :scheduling :will-continue))
+                  '(:id :scheduling :will-continue))
     "Predicate to check if a thing is a valid function response.")
 
 (deff file-data?
-    (is-object-test '(:file-uri) '(:file-uri :mime-type))
+    (is-object-test '(:file-uri) '(:mime-type))
     "Predicate to check if a thing is a valid file data.")
 
 (deff executable-code?
-  (is-object-test '(:code :language) '(:code :language))
+  (is-object-test '(:code :language))
   "Predicate to check if a thing is a valid executable code.")
 
 (deff code-execution-result?
-    (is-object-test '(:outcome) '(:outcome :output))
+    (is-object-test '(:outcome) '(:output))
     "Predicate to check if a thing is a valid code execution result.")
 
 (deff text-part?
-    (is-object-test '(:text) '(:text :thought :thought-signature))
+    (is-object-test '(:text) '(:thought :thought-signature))
     "Predicate to check if a thing is a text part.")
 
 (defun thought-part? (thing)
@@ -118,19 +118,19 @@
        (get-thought-flag thing)))
 
 (deff code-execution-result-part?
-    (is-object-test '(:code-execution-result) '(:code-execution-result))
+    (is-object-test '(:code-execution-result))
     "Predicate to check if a thing is a code execution result part object.")
 
 (deff executable-code-part?
-    (is-object-test '(:executable-code) '(:executable-code))
+    (is-object-test '(:executable-code))
     "Predicate to check if a thing is an executable code part object.")
 
 (deff file-data-part?
-    (is-object-test '(:file-data) '(:file-data))
+    (is-object-test '(:file-data))
     "Predicate to check if a thing is a file data part object.")
 
 (deff function-call-part?
-    (is-object-test '(:function-call) '(:function-call))
+    (is-object-test '(:function-call))
     "Predicate to check if a thing is a function call part object.")
 
 (deff list-of-function-calls?
@@ -138,11 +138,11 @@
     "Predicate to check if a thing is a list of function call part objects.")
 
 (deff function-response-part?
-    (is-object-test '(:function-response) '(:function-response))
+    (is-object-test '(:function-response))
     "Predicate to check if a thing is a function response part object.")
 
 (deff inline-data-part?
-    (is-object-test '(:inline-data) '(:inline-data))
+    (is-object-test '(:inline-data))
     "Predicate to check if a thing is an inline data part object.")
 
 (defun part? (thing)
@@ -165,7 +165,7 @@
     "Predicate to check if a thing is a list of strings.")
 
 (deff gemini-response?
-    (is-object-test '(:candidates) '(:candidates :model-version :response-id :usage-metadata))
+    (is-object-test '(:candidates) '(:model-version :response-id :usage-metadata))
     "Predicate to check if thing is a gemini response.")
 
 (defun content (&key role (parts (error "Content must contain PARTS.")))
@@ -268,13 +268,13 @@
                    max-properties max-properties-supplied-p
                    min-length min-length-supplied-p
                    max-length max-length-supplied-p
-                                    pattern
-                 example
-                 any-of
-                 property-ordering
-                 default
-                 minimum minimum-supplied-p
-                 maximum maximum-supplied-p))
+                   pattern
+                   example
+                   any-of
+                   property-ordering
+                   default
+                   minimum minimum-supplied-p
+                   maximum maximum-supplied-p))
 
   (let ((schema (make-hash-table :test 'equal)))
     (setf (gethash "type" schema) (encode-schema-type-enum type))

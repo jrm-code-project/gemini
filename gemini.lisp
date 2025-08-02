@@ -22,26 +22,36 @@
 
 (defun default-functions ()
   (list (cons "lispEcho" (lambda (&key text)
-                                       (if text
-                                           (format nil "the literal string \"~s\"" text)
-                                           "No text provided.")))
+                           (if text
+                               (format nil "the literal string \"~s\"" text)
+                               "No text provided.")))
         (cons "lispImplementationType" #'lisp-implementation-type)
         (cons "lispImplementationType" #'lisp-implementation-type)
         (cons "lispImplementationVersion" #'lisp-implementation-version)
         (cons "listPackages" (lambda () (map 'list #'package-name (list-all-packages))))
         (cons "packageDocumentation" (lambda (&key package)
-                                       ;(format t "~&Package: ~a~%" package)
+                                        ;(format t "~&Package: ~a~%" package)
                                        (let ((p (find-package (string-upcase package))))
                                          (or (and p
                                                   (or (sb-kernel:package-doc-string p)
                                                       ""))
                                              ""))))
         (cons "ping" (lambda () (values)))
+        (cons "promptingRead" (lambda (&key prompt)
+                                (prompting-read prompt)))
         (cons "symbolValue" (lambda (&key symbol)
-                                       (let ((sym (find-symbol symbol)))
-                                         (if sym
-                                             (format nil "~s" (symbol-value sym))
-                                             (format nil "Symbol ~a not found." symbol)))))
+                              (let ((sym (find-symbol symbol)))
+                                (if sym
+                                    (format nil "~s" (symbol-value sym))
+                                    (format nil "Symbol ~a not found." symbol)))))
+        (cons "yesOrNoP" (lambda (&key question)
+                           (if (yes-or-no-p question)
+                               +json-true+
+                               +json-false+)))
+        (cons "yOrNP" (lambda (&key question)
+                        (if (y-or-n-p question)
+                            +json-true+
+                            +json-false+)))
         ))
 
 (defun default-function-declarations ()
@@ -96,6 +106,16 @@
         :description "Detects whether the model client responds to function calls.")
 
        (function-declaration
+        :name "promptingRead"
+        :description "Prompts the user for input and returns the response.  Do not hesitate to use this function to ask questions of the user or to get input from the user."
+        :behavior :blocking
+        :parameters (schema :type :object
+                            :properties (list (cons "prompt" (schema :type :string)))
+                            :required (list "prompt"))
+        :response (schema :type :string
+                          :description "The user's input response."))
+
+       (function-declaration
         :name "symbolValue"
         :description "Returns the value of a symbol in the Lisp environment."
         :behavior :blocking
@@ -104,6 +124,26 @@
                             :required (list "symbol"))
         :response (schema :type :string
                           :description "The printed representation of the value of symbol, or an error message if the symbol is not found."))
+
+       (function-declaration
+        :name "yesOrNoP"
+        :description "Asks a careful yes/no question and returns the response."
+        :behavior :blocking
+        :parameters (schema :type :object
+                            :properties (list (cons "question" (schema :type :string)))
+                            :required (list "question"))
+        :response (schema :type :boolean
+                          :description "Returns true or false based on user input."))
+
+       (function-declaration
+        :name "yOrNP"
+        :description "Asks a y/n question and returns the response."
+        :behavior :blocking
+        :parameters (schema :type :object
+                            :properties (list (cons "question" (schema :type :string)))
+                            :required (list "question"))
+        :response (schema :type :boolean
+                          :description "Returns true or false based on user input."))
        )))
 
 (defun default-tools ()
@@ -200,18 +240,26 @@
         (t nil)))
 
 (defun process-thought (thought)
+  "Processes a thought part object.
+   If the thought is a text part, it formats the text and outputs it to *trace-output*."
   (format *trace-output* "~&~{;; ~a~%~}"
           (mapcar #'str:trim
                   (str:split #\newline (get-text thought)))))
 
 (defun process-thoughts (thoughts)
+  "Processes a list of thought part objects.
+   Each thought is processed by the `process-thought` function."
   (mapc #'process-thought thoughts))
 
 (defun default-process-arg-value (arg schema)
+  "Processes a single argument value based on the provided schema.
+   Returns the processed value according to the type specified in the schema."
   (ecase (get-type schema)
     (:string arg)))
 
 (defun default-process-arg (arg schema)
+  "Processes a single argument based on the provided schema.
+   Returns a list containing the argument name and its processed value."
   (list (car arg)
         (default-process-arg-value
          (cdr arg)
@@ -219,6 +267,8 @@
                      :key #'->keyword)))))
           
 (defun default-process-args (args schema)
+  "Processes a list of arguments based on the provided schema.
+   Returns a list of processed arguments."
   (mappend (lambda (arg) (default-process-arg arg schema)) args))
 
 (defun default-process-function-call (function-call-part)
@@ -246,12 +296,21 @@
 (defun default-process-function-calls (parts)
   "Processes a list of function call part objects.
    Returns a list of processed function call responses."
-  (invoke-gemini *model*
-                 (content :parts
-                          (mapcar (lambda (part)
-                                    (default-process-function-call (get-function-call part)))
-                                  parts)
-                          :role "function")))
+  (let ((function-calls
+          (remove-if-not #'function-call-part? parts)))
+    (mapc (lambda (part)
+            (when (text-part? part)
+              (format t "~&~a"
+                      (get-text part))))
+          (remove-if #'function-call-part? parts))
+    (if (null function-calls)
+        (error "No function calls found in parts: ~s" parts)
+        (invoke-gemini *model*
+                       (content :parts
+                                (mapcar (lambda (part)
+                                          (default-process-function-call (get-function-call part)))
+                                        function-calls)
+                                :role "function")))))
 
 (defun default-process-content (content)
   "Processes a content object. If the role is 'model' and it contains
@@ -262,9 +321,10 @@
              (raw-parts (get-parts content))
              (thoughts (remove-if-not #'thought-part? raw-parts))
              (parts (remove-if #'thought-part? raw-parts)))
+        (setq *prior-history* *history*)
         ;(format t "~&History: ~s~%" *history*)
         (process-thoughts thoughts)
-        (cond ((list-of-function-calls? parts) (default-process-function-calls parts))
+        (cond ((some #'function-call-part? parts) (default-process-function-calls parts))
               ((singleton-list-of-parts? parts) (default-process-part (first parts)))
               (t parts)))
       content))
@@ -308,6 +368,7 @@
    Returns the processed response from the API, as determined by
    *OUTPUT-PROCESSOR*."
   ;;(format t "~&Contents: ~s~%" (dehashify contents))
+  (setq *prior-model* *model*)
   (let* ((payload (make-hash-table :test 'equal))
          (*history*
            (cond ((content? contents) (cons contents *history*))
@@ -317,6 +378,7 @@
                  ((list-of-parts? contents) (cons (content :parts contents :role "user") *history*))
                  ((list-of-strings? contents) (cons (content :parts (mapcar #'part contents) :role "user") *history*))
                  (t (error "Unrecognized contents: ~s" contents)))))
+    (setq *prior-history* *history*)
     (setf (gethash "contents" payload) (reverse *history*))
     (when cached-content
       (setf (gethash "cachedContent" payload) cached-content))
@@ -331,3 +393,11 @@
     (when tool-config
       (setf (gethash "toolConfig" payload) tool-config))
     (funcall *output-processor* (%invoke-gemini *model* payload))))
+
+(defun gemini-continue (content)
+  "Continues the conversation with the Gemini model using the provided CONTENT.
+   CONTENT can be a content object, a part object, a string, a list of content objects,
+   a list of part objects, or a list of strings.
+   Returns the processed response from the API."
+  (let ((*history* *prior-history*))
+    (invoke-gemini *prior-model* content)))

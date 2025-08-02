@@ -40,12 +40,13 @@
   "Converts a camelCase string to a Lisp keyword.
    If the string is not a valid camelCase string, it signals an error."
   (check-type keystring string)
-  (intern (cl-json:camel-case-to-lisp keystring) (find-package "KEYWORD")))
+  (intern (cl-json:simplified-camel-case-to-lisp keystring) (find-package "KEYWORD")))
 
 (defun ->keyword (thing)
   (etypecase thing
     (keyword thing)
-    (string (keystring->keyword thing))))
+    (string (keystring->keyword thing))
+    (symbol (->keyword (symbol-name thing)))))
 
 (defun ->keystring (thing)
   (etypecase thing
@@ -94,11 +95,11 @@
     (lambda (thing)
       (every valid-key? (keys thing)))))
 
-(defun is-object-test (required-keys valid-keys)
+(defun is-object-test (required-keys &optional additional-valid-keys)
   "Returns a predicate that checks if a given object (alist or hash table)
-   contains all the REQUIRED-KEYS and only the VALID-KEYS."
+   contains all the REQUIRED-KEYS and only the REQUIRED-KEYS and ADDITONAL-VALID-KEYS."
   (let ((required-keys-test (required-keys-test required-keys))
-        (valid-keys-test (valid-keys-test valid-keys)))
+        (valid-keys-test (valid-keys-test (append required-keys additional-valid-keys))))
     (lambda (thing)
       (and (or (alist? thing)
                (hash-table-p thing))
@@ -130,9 +131,53 @@
                                       (gethash (->keystring key) thing)))
             (t (error "Can't get value for ~s from ~s" key thing))))))
 
+(defun function-minimum-arity (func)
+  (collect-length
+   (until-if
+    (lambda (symbol)
+      (member symbol lambda-list-keywords))
+    (scan 'list (sb-introspect:function-lambda-list func)))))
 
+(defun function-return-type (func)
+  "Returns the return type of a function as a string.
+   If the function has no declared return type, it returns NIL."
+  (let ((raw-function-type (sb-introspect:function-type func)))
+    (and (consp raw-function-type)
+         (eq (first raw-function-type) 'function)
+         (let ((raw-return-type (third raw-function-type)))
+           (if (consp raw-return-type)
+               (if (eq (first raw-return-type) 'values)
+                   (second raw-return-type)
+                   raw-return-type)
+               raw-return-type)))))
 
+(defun returns-string? (func)
+  (eq (function-return-type func) 'string))
 
+(defun returns-boolean? (func)
+  (eq (function-return-type func) 'boolean))
 
+(defclass json-boolean ()
+  ((value :initarg :value)))
 
+(defmethod json:encode-json ((object json-boolean) &optional stream)
+  (princ (slot-value object 'value) stream)
+  nil)
 
+(defmethod print-object ((object json-boolean) stream)
+  (print-unreadable-object (object stream :type t)
+    (format stream "~a" (slot-value object 'value))))
+
+(defparameter +json-false+ (make-instance 'json-boolean :value "false"))
+(defparameter +json-true+ (make-instance 'json-boolean :value "true"))
+(defparameter +json-empty-list+ (make-instance 'json-boolean :value "[]"))
+(defparameter +json-empty-object+ (make-instance 'json-boolean :value "{}"))
+
+(defun prompting-read (prompt &optional (default nil))
+  "Prompts the user for input, returning the input as a string.
+   If DEFAULT is provided, it will be used as the default value."
+  (format *query-io* "~&~a: " prompt)
+  (let ((input (read-line *query-io* nil nil)))
+    (if (string= input "")
+        (or default "")
+        input)))
