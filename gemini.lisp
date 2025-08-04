@@ -2,6 +2,10 @@
 
 (in-package "GEMINI")
 
+(defparameter +default-model+ "gemini-2.5-flash"
+  "The default model to use for the Gemini API.
+   This can be overridden by the MODEL keyword argument in `invoke-gemini`.")
+
 (defparameter
   +gemini-api-base-url+
   "https://generativelanguage.googleapis.com/v1beta/models/"
@@ -20,131 +24,190 @@
         (cl-json:decode-json-from-string
           (flex:octets-to-string response :external-format :utf-8)))))
 
-(defun default-functions ()
-  (list (cons "lispEcho" (lambda (&key text)
-                           (if text
-                               (format nil "the literal string \"~s\"" text)
-                               "No text provided.")))
-        (cons "lispImplementationType" #'lisp-implementation-type)
-        (cons "lispImplementationType" #'lisp-implementation-type)
-        (cons "lispImplementationVersion" #'lisp-implementation-version)
-        (cons "listPackages" (lambda () (map 'list #'package-name (list-all-packages))))
-        (cons "packageDocumentation" (lambda (&key package)
+(defun standard-functions-and-handlers ()
+  (list
+   (cons (function-declaration
+          :name "architecture"
+          :description (or (documentation 'uiop/os:architecture 'function)
+                           "Returns the architecture of the machine.")
+          :behavior :blocking
+          :response (schema :type :string))
+         #'uiop:architecture)
+
+   (cons (function-declaration
+          :name "lispEcho"
+          :description "Echoes the argument."
+          :behavior :blocking
+          :parameters (schema :type :unspecified)
+          :response (schema :type :string))
+         (lambda (&key text)
+           (if text
+               (format nil "the literal string \"~s\"" text)
+               "No text provided.")))
+
+   (cons
+    (function-declaration
+     :name "lispImplementationType"
+     :description (or (documentation 'lisp-implementation-type 'function)
+                      "Returns the type of the Lisp implementation.")
+     :behavior :blocking
+     :response (schema :type :string))
+    #'lisp-implementation-type)
+
+   (cons (function-declaration
+          :name "lispImplementationVersion"
+          :description (or (documentation 'lisp-implementation-version 'function)
+                           "Returns the version of the Lisp implementation.")
+          :behavior :blocking
+          :response (schema :type :string))
+         #'lisp-implementation-version)
+
+   (cons (function-declaration
+          :name "listPackages"
+          :description "Returns a list of all packages in the Lisp environment."
+          :behavior :blocking
+          :response (schema :type :array
+                            :items (schema :type :string)))
+         (lambda () (map 'list #'package-name (list-all-packages))))
+
+   (cons (function-declaration
+          :name "longSiteName"
+          :description (or (documentation 'long-site-name 'function)
+                           "Returns the long site name of the machine.")
+          :behavior :blocking
+          :response (schema :type :string))
+         #'long-site-name)
+
+   (cons (function-declaration
+          :name "machineInstance"
+          :description (or (documentation 'machine-instance 'function)
+                           "Returns the name of the machine.")
+          :behavior :blocking
+          :response (schema :type :string))
+         #'machine-instance)
+
+   (cons (function-declaration
+          :name "machineType"
+          :description (or (documentation 'machine-type 'function)
+                           "Returns the type of the machine.")
+          :behavior :blocking
+          :response (schema :type :string))
+         #'machine-type)
+
+   (cons (function-declaration
+          :name "machineVersion"
+          :description (or (documentation 'machine-version 'function)
+                           "Returns the version of the machine.")
+          :behavior :blocking
+          :response (schema :type :string))
+         #'machine-version)
+
+   (cons (function-declaration
+          :name "noHandler"
+          :description "This function is missing its handler.")
+         nil)
+
+   (cons (function-declaration
+          :name "operatingSystem"
+          :description (documentation 'uiop:operating-system 'function)
+          :behavior :blocking
+          :response (schema :type :string))
+         (lambda () (format nil "~s" (uiop:operating-system))))
+
+   (cons (function-declaration
+          :name "packageDocumentation"
+          :description "Returns the documentation string for a package."
+          :behavior :blocking
+          :parameters (schema :type :object
+                              :properties (list (cons "package" (schema :type :string)))
+                              :required (list "package"))
+          :response (schema :type :string))
+         (lambda (&key package)
                                         ;(format t "~&Package: ~a~%" package)
-                                       (let ((p (find-package (string-upcase package))))
-                                         (or (and p
-                                                  (or (sb-kernel:package-doc-string p)
-                                                      ""))
-                                             ""))))
-        (cons "ping" (lambda () (values)))
-        (cons "promptingRead" (lambda (&key prompt)
-                                (prompting-read prompt)))
-        (cons "symbolValue" (lambda (&key symbol)
-                              (let ((sym (find-symbol symbol)))
-                                (if sym
-                                    (format nil "~s" (symbol-value sym))
-                                    (format nil "Symbol ~a not found." symbol)))))
-        (cons "yesOrNoP" (lambda (&key question)
-                           (if (yes-or-no-p question)
-                               +json-true+
-                               +json-false+)))
-        (cons "yOrNP" (lambda (&key question)
-                        (if (y-or-n-p question)
-                            +json-true+
-                            +json-false+)))
-        ))
+           (let ((p (find-package (string-upcase package))))
+             (or (and p
+                      (or (sb-kernel:package-doc-string p)
+                          ""))
+                 ""))))
+
+   (cons (function-declaration
+          :name "ping"
+          :description "Detects whether the model client responds to function calls.")
+         (lambda () (values)))
+
+   (cons (function-declaration
+          :name "promptingRead"
+          :description "Prompts the user for input and returns the response.  Do not hesitate to use this function to ask questions of the user or to get input from the user."
+          :behavior :blocking
+          :parameters (schema :type :object
+                              :properties (list (cons "prompt" (schema :type :string)))
+                              :required (list "prompt"))
+          :response (schema :type :string
+                            :description "The user's input response."))
+         (lambda (&key prompt)
+           (prompting-read prompt)))
+
+   (cons (function-declaration
+          :name "shortSiteName"
+          :description (or (documentation 'short-site-name 'function)
+                           "Returns the short site name of the machine.")
+          :behavior :blocking
+          :response (schema :type :string))
+         #'short-site-name)
+
+   (cons (function-declaration
+          :name "symbolValue"
+          :description "Returns the value of a symbol in the Lisp environment."
+          :behavior :blocking
+          :parameters (schema :type :object
+                              :properties (list (cons "symbol" (schema :type :string)))
+                              :required (list "symbol"))
+          :response (schema :type :string
+                            :description "The printed representation of the value of symbol, or an error message if the symbol is not found."))
+         (lambda (&key symbol)
+           (let ((sym (find-symbol symbol)))
+             (if sym
+                 (format nil "~s" (symbol-value sym))
+                 (format nil "Symbol ~a not found." symbol)))))
+
+   (cons (function-declaration
+          :name "yesOrNoP"
+          :description "Asks a careful yes/no question and returns the response.  Use this for consequential questions that require a definitive yes or no answer."
+          :behavior :blocking
+          :parameters (schema :type :object
+                              :properties (list (cons "question" (schema :type :string)))
+                              :required (list "question"))
+          :response (schema :type :boolean
+                            :description "Returns true or false based on user input."))
+         (lambda (&key question)
+           (if (yes-or-no-p question)
+               +json-true+
+               +json-false+)))
+
+   (cons (function-declaration
+          :name "yOrNP"
+          :description "Asks a y/n question and returns the response.  Use this for simple yes/no questions that do not require a careful answer."
+          :behavior :blocking
+          :parameters (schema :type :object
+                              :properties (list (cons "question" (schema :type :string)))
+                              :required (list "question"))
+          :response (schema :type :boolean
+                            :description "Returns true or false based on user input."))
+         (lambda (&key question)
+           (if (y-or-n-p question)
+               +json-true+
+               +json-false+)))
+   ))
+
+(defun get-handler (name function-and-handler-list)
+  (cdr (assoc name function-and-handler-list :test #'equal :key #'get-name)))
 
 (defun default-function-declarations ()
   (if (boundp '*function-declarations*)
       *function-declarations*
       ;; Add default function declarations here
       ;; Example:
-      (list
-       (function-declaration
-        :name "lispEcho"
-        :description "Echoes the argument."
-        :behavior :blocking
-        :parameters (schema :type :unspecified)
-        :response (schema :type :string))
-
-       (function-declaration
-        :name "lispImplementationType"
-        :description (or (documentation 'lisp-implementation-type 'function)
-                        "Returns the type of the Lisp implementation.")
-        :behavior :blocking
-        :response (schema :type :string))
-
-       (function-declaration
-        :name "lispImplementationVersion"
-        :description (or (documentation 'lisp-implementation-version 'function)
-                        "Returns the version of the Lisp implementation.")
-        :behavior :blocking
-        :response (schema :type :string))
-
-       (function-declaration
-        :name "listPackages"
-        :description "Returns a list of all packages in the Lisp environment."
-        :behavior :blocking
-        :response (schema :type :array
-                          :items (schema :type :string)))
-
-       (function-declaration
-        :name "noHandler"
-        :description "This function is missing its handler.")
-
-       (function-declaration
-        :name "packageDocumentation"
-        :description "Returns the documentation string for a package."
-        :behavior :blocking
-        :parameters (schema :type :object
-                            :properties (list (cons "package" (schema :type :string)))
-                            :required (list "package"))
-        :response (schema :type :string))
-
-       (function-declaration
-        :name "ping"
-        :description "Detects whether the model client responds to function calls.")
-
-       (function-declaration
-        :name "promptingRead"
-        :description "Prompts the user for input and returns the response.  Do not hesitate to use this function to ask questions of the user or to get input from the user."
-        :behavior :blocking
-        :parameters (schema :type :object
-                            :properties (list (cons "prompt" (schema :type :string)))
-                            :required (list "prompt"))
-        :response (schema :type :string
-                          :description "The user's input response."))
-
-       (function-declaration
-        :name "symbolValue"
-        :description "Returns the value of a symbol in the Lisp environment."
-        :behavior :blocking
-        :parameters (schema :type :object
-                            :properties (list (cons "symbol" (schema :type :string)))
-                            :required (list "symbol"))
-        :response (schema :type :string
-                          :description "The printed representation of the value of symbol, or an error message if the symbol is not found."))
-
-       (function-declaration
-        :name "yesOrNoP"
-        :description "Asks a careful yes/no question and returns the response."
-        :behavior :blocking
-        :parameters (schema :type :object
-                            :properties (list (cons "question" (schema :type :string)))
-                            :required (list "question"))
-        :response (schema :type :boolean
-                          :description "Returns true or false based on user input."))
-
-       (function-declaration
-        :name "yOrNP"
-        :description "Asks a y/n question and returns the response."
-        :behavior :blocking
-        :parameters (schema :type :object
-                            :properties (list (cons "question" (schema :type :string)))
-                            :required (list "question"))
-        :response (schema :type :boolean
-                          :description "Returns true or false based on user input."))
-       )))
+      (map 'list #'car (standard-functions-and-handlers))))
 
 (defun default-tools ()
   "Returns the value of *TOOLS* if it is bound, otherwise NIL.
@@ -274,16 +337,21 @@
 (defun default-process-function-call (function-call-part)
   (let* ((name (get-name function-call-part))
          (args (get-args function-call-part))
-         (schema (get-properties
-                  (get-parameters
-                   (find name (default-function-declarations)
-                         :key #'get-name :test #'equal))))
-         (handler (cdr (assoc name (default-functions) :test #'equal)))
+         (functions (standard-functions-and-handlers))
+         (entry (assoc name functions :key #'get-name :test #'equal))
+         ;;(ignore1 (format t "~&Processing function call: ~a, entry ~s~%" name entry))
+         (schema (and entry
+                      (get-properties
+                       (get-parameters
+                        (car entry)))))
+         (handler (and entry (cdr entry)))
          (response-part (make-hash-table :test 'equal)))
     (setf (gethash "functionResponse" response-part)
           (function-response
            :name name
-           :response (cond ((null handler)
+           :response (cond ((null entry)
+                            `((:error . ,(format nil "No entry for ~s." name))))
+                           ((null handler)
                             `((:error . ,(format nil "No handler for ~s." name))))
                            ((not (functionp handler))
                             `((:error . ,(format nil "Handler for ~s is not a function." name))))
@@ -305,12 +373,12 @@
           (remove-if #'function-call-part? parts))
     (if (null function-calls)
         (error "No function calls found in parts: ~s" parts)
-        (invoke-gemini *model*
-                       (content :parts
-                                (mapcar (lambda (part)
-                                          (default-process-function-call (get-function-call part)))
-                                        function-calls)
-                                :role "function")))))
+        (invoke-gemini
+         (content :parts
+                  (mapcar (lambda (part)
+                            (default-process-function-call (get-function-call part)))
+                          function-calls)
+                  :role "function")))))
 
 (defun default-process-content (content)
   "Processes a content object. If the role is 'model' and it contains
@@ -337,15 +405,31 @@
     (error "Invalid finish reason: ~s" candidate))
   (default-process-content (get-content candidate)))
 
+(defun process-usage-metadata (usage-metadata)
+  "Processes usage metadata from the API response.
+   Outputs the usage information to *trace-output*."
+  (format *trace-output* "~&;; Prompt Tokens:    ~7,' d~%~
+                            ;; Thoughts Tokens:  ~7,' d~%~
+                            ;; Candidate Tokens: ~7,' d~%~
+                            ;; Total Tokens:     ~7,' d~%"
+          (get-prompt-token-count usage-metadata)
+          (or (get-thoughts-token-count usage-metadata) 0)
+          (get-candidates-token-count usage-metadata)
+          (get-total-token-count usage-metadata)))
+
 (defun default-process-response (response)
   "Processes an API response object.
    If the response contains one candidate, process that candidate.
    Otherwise return the list of candidates."
   (if (gemini-response? response)
-      (let ((candidates (get-candidates response)))
-        (if (singleton-list-of-candidates? candidates)
-            (default-process-candidate (car candidates))
-            candidates))
+      (unwind-protect
+           (let ((candidates (get-candidates response)))
+             (if (singleton-list-of-candidates? candidates)
+                 (default-process-candidate (car candidates))
+                 candidates))
+        (let ((usage-metadata (get-usage-metadata response)))
+          (when usage-metadata
+            (process-usage-metadata usage-metadata))))
       (error "Unrecognized Gemini response ~s" response)))
 
 (defvar *output-processor* #'default-process-response
@@ -353,7 +437,8 @@
    Can be set to a custom function to handle the response differently.
    Defaults to DEFAULT-PROCESS-RESPONSE.")
 
-(defun invoke-gemini (*model* contents &key
+(defun invoke-gemini (contents &key
+                      ((:model *model*) +default-model+)
                       (cached-content (default-cached-content))
                       (generation-config (default-generation-config))
                       (tools (default-tools))
@@ -400,4 +485,4 @@
    a list of part objects, or a list of strings.
    Returns the processed response from the API."
   (let ((*history* *prior-history*))
-    (invoke-gemini *prior-model* content)))
+    (invoke-gemini content :model *prior-model*)))

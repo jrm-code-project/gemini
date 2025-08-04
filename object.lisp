@@ -8,6 +8,9 @@
 (deff get-candidates (object-ref-function :candidates)
     "Retrieves the 'candidates' field from an object.")
 
+(deff get-candidates-token-count (object-ref-function :candidates-token-count)
+    "Retrieves the 'candidatesTokenCount' field from an object, typically used in API responses.")
+
 (deff get-content (object-ref-function :content)
     "Retrieves the 'content' field from an object.")
 
@@ -29,6 +32,9 @@
 (deff get-properties (object-ref-function :properties)
     "Retrieves the 'properties' field from an object.")
 
+(deff get-prompt-token-count (object-ref-function :prompt-token-count)
+    "Retrieves the 'promptTokenCount' field from an object, typically used in API responses.")
+
 (deff get-role (object-ref-function :role)
     "Retrieves the 'role' field from an object.")
 
@@ -38,8 +44,17 @@
 (deff get-thought-flag (object-ref-function :thought)
     "Retrieves the 'thought' field from an object.")
 
+(deff get-thoughts-token-count (object-ref-function :thoughts-token-count)
+    "Retrieves the 'thoughtsTokenCount' field from an object, typically used in API responses.")
+
+(deff get-total-token-count (object-ref-function :total-token-count)
+    "Retrieves the 'totalTokenCount' field from an object, typically used in API responses.")
+
 (deff %get-type (object-ref-function :type)
     "Retrieves the 'type' field from an object, typically used in schemas.")
+
+(deff get-usage-metadata (object-ref-function :usage-metadata)
+    "Retrieves the 'usageMetadata' field from an object.")
 
 (defun decode-schema-type-enum (code)
   "Returns a schema type for the given CODE."

@@ -181,3 +181,123 @@
     (if (string= input "")
         (or default "")
         input)))
+
+(defun filter-external-symbols (package filter)
+  "Return a list of external symbols in PACKAGE that match the FILTER function."
+  (loop for sym being the external-symbols in package
+        when (funcall filter sym)
+          collect sym))
+
+(defun filter-symbols (package filter)
+  "Return a list of internal-symbols in PACKAGE that match the FILTER function."
+  (loop for sym being the symbols in package
+        when (funcall filter sym)
+          collect sym))
+
+(defun filter-visible-symbols (package filter)
+  "Return a list of visible symbols in PACKAGE."
+  (let* ((external (filter-external-symbols package filter))
+         (internal (filter-symbols package
+                                   (lambda (sym)
+                                     (and (not (member (symbol-name sym) external :test #'equal :key #'symbol-name))
+                                          (funcall filter sym)))))
+         (inherited (mappend (lambda (package)
+                               (filter-external-symbols
+                                package
+                                (lambda (sym)
+                                  (and (not (member (symbol-name sym) external :test #'equal :key #'symbol-name))
+                                       (not (member (symbol-name sym) internal :test #'equal :key #'symbol-name))
+                                       (funcall filter sym)))))
+                             (package-use-list package))))
+    (remove-duplicates (sort (append external internal inherited) #'string< :key #'symbol-name))))
+
+(defun visible-functions (package)
+  "Return a list of visible functions defined in the given PACKAGE."
+  (filter-visible-symbols
+   package
+   (lambda (sym)
+     (and (fboundp sym)
+          (not (macro-function sym))
+          (not (str:starts-with? "%" (symbol-name sym)))))))
+
+(defun external-functions (package)
+  "Return a list of external functions defined in the given PACKAGE."
+  (filter-external-symbols
+   package
+   (lambda (sym)
+     (and (fboundp sym)
+          (not (macro-function sym))
+          (not (str:starts-with? "%" (symbol-name sym)))))))
+
+(defun visible-macros (package)
+  "Return a list of macros visible in the given PACKAGE."
+  (filter-visible-symbols
+   package
+   (lambda (sym)
+     (and (fboundp sym)
+          (macro-function sym)
+          (not (str:starts-with? "%" (symbol-name sym)))))))
+
+(defun external-macros (package)
+  "Return a list of external functions defined in the given PACKAGE."
+  (filter-external-symbols
+   package
+   (lambda (sym)
+     (and (fboundp sym)
+          (macro-function sym)
+          (not (str:starts-with? "%" (symbol-name sym)))))))
+
+(defun visible-variables (package)
+  "Return a list of variables visible in the given PACKAGE."
+  (filter-visible-symbols package 
+                          (lambda (sym)
+                            (and (boundp sym)
+                                 (not (str:starts-with? "%" (symbol-name sym)))))))
+
+(defun external-variables (package)
+  "Return a list of external functions defined in the given PACKAGE."
+  (filter-external-symbols package 
+                           (lambda (sym)
+                             (and (boundp sym)
+                                  (not (str:starts-with? "%" (symbol-name sym)))))))
+
+(defun filter-package-list ()
+  "Return a list of packages to consider for code generation."
+  (sort (append
+         (mappend (lambda (pn)
+                    (let ((p (find-package pn)))
+                      (when p (list p))))
+                  '("SB-CLTL2"
+                    "SB-MOP"))
+         (remove-if
+          (lambda (package)
+            (let ((name (package-name package)))
+              (or (equal name "KEYWORD")
+                  (str:starts-with? "QL-" name)
+                  (str:starts-with? "SB-" name)
+                  (str:starts-with? "SLYNK" name)
+                  (str:ends-with? "-ASD" name)
+                  (str:ends-with? "-SYSTEM" name)
+                  (str:ends-with? "-TEST" name)
+                  (str:ends-with? "-TESTS" name)
+                  ;(find #\/ name)
+                  (find #\. name)
+                  )))
+          (list-all-packages)))
+        #'string<
+        :key #'package-name))
+
+(defun get-top-level-functions ()
+  "Return a list of top-level functions defined anywhere."
+  (sort (remove-duplicates (mappend #'external-functions (filter-package-list)))
+        #'string< :key #'symbol-name))
+
+(defun get-top-level-macros ()
+  "Return a list of top-level macros defined anywhere."
+  (sort (remove-duplicates (mappend #'external-macros (filter-package-list)))
+        #'string< :key #'symbol-name))
+
+(defun get-top-level-variables ()
+  "Return a list of top-level functions defined anywhere."
+  (sort (remove-duplicates (mappend #'external-variables (filter-package-list)))
+        #'string< :key #'symbol-name))
