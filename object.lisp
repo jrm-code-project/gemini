@@ -145,7 +145,7 @@
     "Predicate to check if a thing is a file data part object.")
 
 (deff function-call-part?
-    (is-object-test '(:function-call))
+    (is-object-test '(:function-call) '(:thought-signature))
     "Predicate to check if a thing is a function call part object.")
 
 (deff list-of-function-calls?

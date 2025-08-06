@@ -191,8 +191,14 @@
 (defun default-tool-config ()
   "Returns the value of *TOOL-CONFIG* if it is bound, otherwise NIL.
    Provides a default tool configuration object for generation."
-  (when (boundp '*tool-config*)
-    *tool-config*))
+  (if (boundp '*tool-config*)
+      *tool-config*
+      (let ((config (make-hash-table :test 'equal)))
+        (setf (gethash "function_calling_config" config)
+              (let ((function-calling-config (make-hash-table :test 'equal)))
+                (setf (gethash "mode" function-calling-config) "AUTO")
+                function-calling-config))
+        config)))
 
 (defvar *language-code*)
 (eval-when (:compile-toplevel :load-toplevel :execute)
