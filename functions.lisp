@@ -211,45 +211,6 @@
        (lambda (&key system)
          (format nil "~s" (ql:quickload system)))))
 
-     (list
-      (cons
-       (function-declaration
-        :name "longSiteName"
-        :description (or (documentation 'long-site-name 'function)
-                         "Returns the long site name of the machine.")
-        :behavior :blocking
-        :response (schema :type :string))
-       #'long-site-name))
-
-     (list
-      (cons
-       (function-declaration
-        :name "machineInstance"
-        :description (or (documentation 'machine-instance 'function)
-                         "Returns the name of the machine.")
-        :behavior :blocking
-        :response (schema :type :string))
-       #'machine-instance))
-
-     (list
-      (cons
-       (function-declaration
-        :name "machineType"
-        :description (or (documentation 'machine-type 'function)
-                         "Returns the type of the machine.")
-        :behavior :blocking
-        :response (schema :type :string))
-       #'machine-type))
-
-     (list
-      (cons
-       (function-declaration
-        :name "machineVersion"
-        :description (or (documentation 'machine-version 'function)
-                         "Returns the version of the machine.")
-        :behavior :blocking
-        :response (schema :type :string))
-       #'machine-version))
 
      (list
       (cons
@@ -459,74 +420,221 @@
      )))
 
 (defun standard-functions-and-handlers ()
-  (list
-   (cons
-    (function-declaration
-     :name "noHandler"
-     :description "This function is missing its handler.  Used for testing purposes.")
-    nil)
+  (remove
+   nil
+   (list
 
-   (cons
-    (function-declaration
-     :name "operatingSystem"
-     :description (documentation 'uiop:operating-system 'function)
-     :behavior :blocking
-     :response (schema :type :string))
-    (lambda () (format nil "~s" (uiop:operating-system))))
+    (cons
+     (function-declaration
+      :name "httpGet"
+      :description "Performs an HTTP GET request to the specified URL and returns the response body as a string."
+      :behavior :blocking
+      :parameters (schema :type :object
+                          :properties (list
+                                       (cons
+                                        "url" (schema :type :string)))
+                          :required (list "url"))
+      :response (schema :type :string))
+     (lambda (&key url)
+       (dexador:get url)))
 
-   (cons
-    (function-declaration
-     :name "ping"
-     :description "Detects whether the model client is responding to function calls.")
-    (lambda () (values)))
+    (cons
+     (function-declaration
+      :name "longSiteName"
+      :description (or (documentation 'long-site-name 'function)
+                       "Returns the long site name of the machine.")
+      :behavior :blocking
+      :response (schema :type :string))
+     (lambda ()
+       (let ((long-name (long-site-name)))
+         (if (stringp long-name)
+             long-name
+             "Unknown")))) 
 
-   (cons
-    (function-declaration
-     :name "promptingRead"
-     :description "Prompts the user for input and returns the response.  Do not hesitate to use this function to ask questions of the user or to get input from the user."
-     :behavior :blocking
-     :parameters (schema :type :object
-                         :properties (list
-                                      (cons
-                                       "prompt" (schema :type :string)))
-                         :required (list "prompt"))
-     :response (schema :type :string
-                       :description "The user's input response."))
-    (lambda (&key prompt)
-      (prompting-read prompt)))
+    (cons
+     (function-declaration
+      :name "machineInstance"
+      :description (or (documentation 'machine-instance 'function)
+                       "Returns the name of the machine.")
+      :behavior :blocking
+      :response (schema :type :string))
+     #'machine-instance)
 
-   (cons
-    (function-declaration
-     :name "yesOrNoP"
-     :description "Asks a careful yes/no question and returns the response.  Use this for consequential questions that require a definitive yes or no answer."
-     :behavior :blocking
-     :parameters (schema :type :object
-                         :properties (list
-                                      (cons
-                                       "question" (schema :type :string)))
-                         :required (list "question"))
-     :response (schema :type :boolean
-                       :description "Returns true or false based on user input."))
-    (lambda (&key question)
-      (if (yes-or-no-p question)
-          +json-true+
-          +json-false+)))
+    (cons
+     (function-declaration
+      :name "machineType"
+      :description (or (documentation 'machine-type 'function)
+                       "Returns the type of the machine.")
+      :behavior :blocking
+      :response (schema :type :string))
+     #'machine-type)
 
-   (cons
-    (function-declaration
-     :name "yOrNP"
-     :description "Asks a y/n question and returns the response.  Use this for simple yes/no questions that do not require a careful answer."
-     :behavior :blocking
-     :parameters (schema :type :object
-                         :properties (list
-                                      (cons
-                                       "question" (schema :type :string)))
-                         :required (list "question"))
-     :response (schema :type :boolean
-                       :description "Returns true or false based on user input."))
-    (lambda (&key question)
-      (if (y-or-n-p question)
-          +json-true+
-          +json-false+)))
-   ))
+    (cons
+     (function-declaration
+      :name "machineVersion"
+      :description (or (documentation 'machine-version 'function)
+                       "Returns the version of the machine.")
+      :behavior :blocking
+      :response (schema :type :string))
+     (lambda ()
+       (let ((version (machine-version)))
+         (if (stringp version)
+             version
+             "Unknown"))))
+
+    (cons
+     (function-declaration
+      :name "noHandler"
+      :description "This function is missing its handler.  Used for testing purposes.")
+     nil)
+
+    (cons
+     (function-declaration
+      :name "operatingSystem"
+      :description (documentation 'uiop:operating-system 'function)
+      :behavior :blocking
+      :response (schema :type :string))
+     (lambda () (format nil "~s" (uiop:operating-system))))
+
+    (cons
+     (function-declaration
+      :name "ping"
+      :description "Detects whether the model client is responding to function calls.")
+     (lambda () (values)))
+
+    (cons
+     (function-declaration
+      :name "print"
+      :description "Print a string for display to the user."
+      :behavior :blocking
+      :parameters (schema :type :object
+                          :properties (list
+                                       (cons
+                                        "string" (schema :type :string)))
+                          :required (list "string")))
+     (lambda (&key string)
+       (print string)
+       (values)))
+
+    (cons
+     (function-declaration
+      :name "promptingRead"
+      :description "Prompts the user for input and returns the response.  Do not hesitate to use this function to ask questions of the user or to get input from the user."
+      :behavior :blocking
+      :parameters (schema :type :object
+                          :properties (list
+                                       (cons
+                                        "prompt" (schema :type :string)))
+                          :required (list "prompt"))
+      :response (schema :type :string
+                        :description "The user's input response."))
+     (lambda (&key prompt)
+       (prompting-read prompt)))
+
+    (cons
+     (function-declaration
+      :name "randomInteger"
+      :description "Returns a random integer between 0 and the given maximum value (exclusive).  Use this to generate random numbers."
+      :behavior :blocking
+      :parameters (schema :type :object
+                          :properties (list
+                                       (cons
+                                        "max" (schema :type :integer)))
+                          :required (list "max"))
+      :response (schema :type :integer))
+     (lambda (&key max)
+       (if (and (integerp max) (> max 0))
+           (let ((random-integer (random max)))
+             (if (integerp random-integer)
+                 random-integer
+                 0))
+           0)))
+
+    (cons
+     (function-declaration
+      :name "shortSiteName"
+      :description (or (documentation 'short-site-name 'function)
+                       "Returns the short site name of the machine.")
+      :behavior :blocking
+      :response (schema :type :string))
+     (lambda ()
+       (let ((short-name (short-site-name)))
+         (if (stringp short-name)
+             short-name
+             "Unknown"))))
+
+    (when (and (custom-search-engine-id)
+               (custom-search-engine-api-key))
+      (cons
+       (function-declaration
+        :name "webSearch"
+        :description "Search the Web for pages about a topic."
+        :behavior :blocking
+        :parameters (schema :type :object
+                            :properties (list
+                                         (cons
+                                          "searchTerms" (schema :type :string)))
+                            :required (list "searchTerms"))
+        :response (schema :type :object
+                          :properties (list
+                                       (cons "items"
+                                             (schema :type :array
+                                                     :items (schema :type :object
+                                                                    :properties (list
+                                                                                 (cons "title" (schema :type :string))
+                                                                                 (cons "link" (schema :type :string))
+                                                                                 (cons "snippet" (schema :type :string)))
+                                                                    :required (list "title" "link" "snippet")))))
+                          :required (list "items")))
+       (lambda (&key search-terms)
+         (format *trace-output* "~&;; Search Terms: ~{~a~^ ~}~%" (str:split " " search-terms :omit-nulls t))
+         (finish-output *trace-output*)
+         (let* ((results (web-search
+                          (str:join "+" (str:split " " search-terms :omit-nulls t))))
+                (items (get-items results))
+                (response (make-hash-table :test 'equal)))
+           (setf (gethash "items" response)
+                 (map 'list (lambda (item)
+                              (let ((response-item (make-hash-table :test 'equal)))
+                                (setf (gethash "title" response-item) (get-title item)
+                                      (gethash "link" response-item) (get-link item)
+                                      (gethash "snippet" response-item) (get-snippet item))
+                                response-item))
+                      items))
+           response))))
+
+    (cons
+     (function-declaration
+      :name "yesOrNoP"
+      :description "Asks a careful yes/no question and returns the response.  Use this for consequential questions that require a definitive yes or no answer."
+      :behavior :blocking
+      :parameters (schema :type :object
+                          :properties (list
+                                       (cons
+                                        "question" (schema :type :string)))
+                          :required (list "question"))
+      :response (schema :type :boolean
+                        :description "Returns true or false based on user input."))
+     (lambda (&key question)
+       (if (yes-or-no-p question)
+           +json-true+
+           +json-false+)))
+
+    (cons
+     (function-declaration
+      :name "yOrNP"
+      :description "Asks a y/n question and returns the response.  Use this for simple yes/no questions that do not require a careful answer."
+      :behavior :blocking
+      :parameters (schema :type :object
+                          :properties (list
+                                       (cons
+                                        "question" (schema :type :string)))
+                          :required (list "question"))
+      :response (schema :type :boolean
+                        :description "Returns true or false based on user input."))
+     (lambda (&key question)
+       (if (y-or-n-p question)
+           +json-true+
+           +json-false+)))
+    )))
 

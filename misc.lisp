@@ -2,6 +2,36 @@
 
 (in-package "GEMINI")
 
+(defun deflow (string)
+  "Removes newlines from STRING and replaces them with spaces, ensuring that the result is a single line."
+  (let ((lines
+            (remove-if (lambda (line) (zerop (length line)))
+                       (map 'list #'str:trim (str:split #\newline string)))))
+    (and lines 
+         (str:join #\Space lines))))
+
+(defun reflow-comment (lines)
+  "Reflow a list of lines into a single string."
+  (let iter ((lines lines)
+             (words nil)
+             (new-line ";;")
+             (answer ""))
+    (cond ((> (length new-line) 80)
+           (iter lines words ";;" (concatenate 'string answer new-line "
+")))
+          ((null words)
+           (cond ((null lines) (concatenate 'string answer new-line))
+                 ((zerop (length (car lines)))
+                  (iter (cdr lines) nil ";;" (concatenate 'string answer new-line "
+")))
+                 (t
+                  (iter (cdr lines) (str:split #\Space (car lines)) ";;" (concatenate 'string answer new-line "
+")))))
+          (t (iter lines (cdr words) (if (zerop (length new-line))
+                                         (car words)
+                                         (concatenate 'string new-line " " (car words)))
+               answer)))))
+
 (defun dehashify (object)
   (cond ((hash-table-p object)
          (mapcar #'dehashify (hash-table-alist object)))
@@ -301,3 +331,13 @@
   "Return a list of top-level functions defined anywhere."
   (sort (remove-duplicates (mappend #'external-variables (filter-package-list)))
         #'string< :key #'symbol-name))
+
+(defun web-search (query)
+  (let ((response (dex:get (format nil "https://www.googleapis.com/customsearch/v1?cx=~a&q=~a"
+                                   (custom-search-engine-id)
+                                   query)
+                           :headers `(("x-goog-api-key". ,(custom-search-engine-api-key))))))
+    (if (stringp response)
+        (cl-json:decode-json-from-string response)
+        (cl-json:decode-json-from-string
+         (flex:octets-to-string response :external-format :utf-8)))))

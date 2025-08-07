@@ -17,6 +17,16 @@
    Google APIs configuration directory."
   (merge-pathnames "default-project" (googleapis-pathname)))
 
+(defun default-custom-search-engine-apikey-pathname ()
+  "Returns the default pathname for the Google Custom Search Engine API key file
+   within the Google APIs configuration directory."
+  (merge-pathnames "cse-apikey" (googleapis-pathname)))
+
+(defun default-custom-search-engine-id-pathname ()
+  "Returns the default pathname for the Google Custom Search Engine ID file
+   within the Google APIs configuration directory."
+  (merge-pathnames "cse-id" (googleapis-pathname)))
+
 (defun default-project ()
   "Reads and returns the default Google Cloud project name from its
    designated configuration file. Returns NIL if the file does not exist
@@ -35,6 +45,16 @@
                                   :name "apikey")
                    (googleapis-pathname)))
 
+(defun project-cse-pathname (project)
+  (merge-pathnames (make-pathname :directory (list :relative project "CustomSearchEngine"))
+                   (googleapis-pathname)))
+
+(defun project-custom-search-engine-apikey-pathname (project)
+  (merge-pathnames (project-cse-pathname project) "apikey"))
+
+(defun project-custom-search-engine-id-pathname (project)
+  (merge-pathnames (project-cse-pathname project) "id"))
+
 (defun apikey-pathname ()
   "Determines the effective pathname for the Google API key.
    It first checks for a project-specific API key (if a default project
@@ -44,6 +64,22 @@
         (when project
           (probe-file (project-apikey-pathname project))))
       (probe-file (default-apikey-pathname))))
+
+(defun custom-search-engine-apikey-pathname ()
+  "Determines the effective pathname for the Google API key.
+   It first checks for a project-specific API key (if a default project
+   is set), then falls back to the default API key pathname.
+   Returns the pathname if found, otherwise NIL."
+  (or (let ((project (default-project)))
+        (when project
+          (probe-file (project-custom-search-engine-apikey-pathname project))))
+      (probe-file (default-custom-search-engine-apikey-pathname))))
+
+(defun custom-search-engine-id-pathname ()
+  (or (let ((project (default-project)))
+        (when project
+          (probe-file (project-custom-search-engine-id-pathname project))))
+      (probe-file (default-custom-search-engine-id-pathname))))
 
 (defun google-api-key ()
   "Retrieves the Google API key. It first attempts to read it from
@@ -59,3 +95,23 @@
       (uiop:getenv "GOOGLE_API_KEY")
       (error "No Google API key found. Set the environment variable GOOGLE_API_KEY or create a file at ~a."
              (namestring (apikey-pathname)))))
+
+(defun custom-search-engine-api-key ()
+  (or (let ((pathname (custom-search-engine-apikey-pathname)))
+        (and pathname
+             (with-open-file (stream pathname :direction :input)
+               (let ((line (read-line stream nil)))
+                 (when line
+                   (str:trim line))))))
+      (uiop:getenv "GOOGLE_CSE_API_KEY")
+      (error "No Google Custom Search Engine API key found.  Set the environment variable GOOGLE_CSE_API_KEY or create file at ~a." (namestring (custom-search-engine-apikey-pathname)))))
+
+(defun custom-search-engine-id ()
+  (or (let ((pathname (custom-search-engine-id-pathname)))
+        (and pathname
+             (with-open-file (stream pathname :direction :input)
+               (let ((line (read-line stream nil)))
+                 (when line
+                   (str:trim line))))))
+      (uiop:getenv "GOOGLE_CSE_ID")
+      (error "No Google Custom Search Engine ID found.  Set the environment variable GOOGLE_CSE_ID or cerate file at ~a." (namestring (custom-search-engine-id-pathname)))))

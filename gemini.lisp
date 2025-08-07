@@ -130,9 +130,10 @@
 (defun process-thought (thought)
   "Processes a thought part object.
    If the thought is a text part, it formats the text and outputs it to *trace-output*."
-  (format *trace-output* "~&~{;; ~a~%~}"
-          (mapcar #'str:trim
-                  (str:split #\newline (get-text thought)))))
+  (format *trace-output* "~&~a~%"
+          (reflow-comment
+           (mapcar #'str:trim
+                   (str:split #\newline (get-text thought))))))
 
 (defun process-thoughts (thoughts)
   "Processes a list of thought part objects.
@@ -143,6 +144,7 @@
   "Processes a single argument value based on the provided schema.
    Returns the processed value according to the type specified in the schema."
   (ecase (get-type schema)
+    (:integer (if (integerp arg) arg (error "Expected integer, got ~s" arg)))
     (:string arg)))
 
 (defun default-process-arg (arg schema)

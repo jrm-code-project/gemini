@@ -20,6 +20,12 @@
 (deff get-function-call (object-ref-function :function-call)
     "Retrieves the 'functionCall' field from an object.")
 
+(deff get-items (object-ref-function :items)
+    "Retrieves the 'items' field from an object.")
+
+(deff get-link (object-ref-function :link)
+    "Retrieves the 'link' field from an object.")
+
 (deff get-name (object-ref-function :name)
     "Retrieves the 'name' field from an object.")
 
@@ -38,6 +44,9 @@
 (deff get-role (object-ref-function :role)
     "Retrieves the 'role' field from an object.")
 
+(deff get-snippet (object-ref-function :snippet)
+    "Retrieves the 'snippet' field from an object.")
+
 (deff get-text (object-ref-function :text)
     "Retrieves the 'text' field from an object.")
 
@@ -46,6 +55,9 @@
 
 (deff get-thoughts-token-count (object-ref-function :thoughts-token-count)
     "Retrieves the 'thoughtsTokenCount' field from an object, typically used in API responses.")
+
+(deff get-title (object-ref-function :title)
+    "Retrieves the 'title' field from an object.")
 
 (deff get-total-token-count (object-ref-function :total-token-count)
     "Retrieves the 'totalTokenCount' field from an object, typically used in API responses.")
