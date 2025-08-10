@@ -2,71 +2,71 @@
 
 (in-package "GEMINI")
 
-(deff get-args (object-ref-function :args)
-    "Retrieves the 'args' field from an object, typically used in function calls.")
+(define-standard-fields
+  :args
+  :behavior
+  :cached-content
+  :candidate-count
+  :candidates
+  :candidates-token-count
+  :code-execution-result
+  :content
+  :description
+  :enable-advanced-civic-answers
+  :executable-code
+  :file-data
+  :finish-reason
+  :format
+  :frequency-penalty
+  :function-call
+  :function-declarations
+  :function-response
+  :generation-config
+  :inline-data
+  :items
+  :link
+  :logprobs
+  :max-output-tokens
+  :media-resolution
+  :metadata
+  :name
+  :nullable
+  :parameters
+  :parameters-json-schema
+  :parts
+  :presence-penalty
+  :prompt-token-count
+  :properties
+  :required
+  :response
+  :response-json-schema
+  :response-logprobs
+  :response-mime-type
+  :response-modalities
+  :response-schema
+  :role
+  :safety-settings
+  :seed
+  :snippet
+  :speech-config
+  :stop-sequences
+  :system-instruction
+  :temperature
+  :text
+  :thinking-config
+  :thought
+  :thought-signature
+  :thoughts-token-count
+  :title
+  :tool-config
+  :tools
+  :top-k
+  :top-p
+  :total-token-count
+  ;; :type
+  :usage-metadata)
 
-(deff get-candidates (object-ref-function :candidates)
-    "Retrieves the 'candidates' field from an object.")
-
-(deff get-candidates-token-count (object-ref-function :candidates-token-count)
-    "Retrieves the 'candidatesTokenCount' field from an object, typically used in API responses.")
-
-(deff get-content (object-ref-function :content)
-    "Retrieves the 'content' field from an object.")
-
-(deff get-finish-reason (object-ref-function :finish-reason)
-    "Retrieves the 'finishReason' field from an object.")
-
-(deff get-function-call (object-ref-function :function-call)
-    "Retrieves the 'functionCall' field from an object.")
-
-(deff get-items (object-ref-function :items)
-    "Retrieves the 'items' field from an object.")
-
-(deff get-link (object-ref-function :link)
-    "Retrieves the 'link' field from an object.")
-
-(deff get-name (object-ref-function :name)
-    "Retrieves the 'name' field from an object.")
-
-(deff get-parameters (object-ref-function :parameters)
-    "Retrieves the 'parameters' field from an object, typically used in function calls.")
-
-(deff get-parts (object-ref-function :parts)
-    "Retrieves the 'parts' field from an object.")
-
-(deff get-properties (object-ref-function :properties)
-    "Retrieves the 'properties' field from an object.")
-
-(deff get-prompt-token-count (object-ref-function :prompt-token-count)
-    "Retrieves the 'promptTokenCount' field from an object, typically used in API responses.")
-
-(deff get-role (object-ref-function :role)
-    "Retrieves the 'role' field from an object.")
-
-(deff get-snippet (object-ref-function :snippet)
-    "Retrieves the 'snippet' field from an object.")
-
-(deff get-text (object-ref-function :text)
-    "Retrieves the 'text' field from an object.")
-
-(deff get-thought-flag (object-ref-function :thought)
-    "Retrieves the 'thought' field from an object.")
-
-(deff get-thoughts-token-count (object-ref-function :thoughts-token-count)
-    "Retrieves the 'thoughtsTokenCount' field from an object, typically used in API responses.")
-
-(deff get-title (object-ref-function :title)
-    "Retrieves the 'title' field from an object.")
-
-(deff get-total-token-count (object-ref-function :total-token-count)
-    "Retrieves the 'totalTokenCount' field from an object, typically used in API responses.")
-
-(deff %get-type (object-ref-function :type)
-    "Retrieves the 'type' field from an object, typically used in schemas.")
-
-(deff get-usage-metadata (object-ref-function :usage-metadata)
-    "Retrieves the 'usageMetadata' field from an object.")
+(define-field :type %get-type %set-type!)
 
 (defun decode-schema-type-enum (code)
   "Returns a schema type for the given CODE."
@@ -95,12 +95,19 @@
   "Retrieves the type of a schema object."
   (decode-schema-type-enum (%get-type schema)))
 
+(defun set-type! (schema type)
+  "Sets the type of a schema object to TYPE.
+   Valid types are 'string', 'number', 'integer', 'boolean', 'object', 'array'."
+  (setf (%get-type schema) (encode-schema-type-enum type)))
+
+(defsetf get-type set-type!)
+
 (deff blob?
     (is-object-test '(:data :mime-type))
     "Predicate to check if a thing is a valid blob object (inline data).")
 
 (deff candidate?
-    (is-object-test '(:content) '(:finish-reason :index))
+    (is-object-test '(:content) '(:finish-reason :index :citation-metadata))
     "Predicate to check if a thing is a valid candidate object from the API response.")
 
 (deff singleton-list-of-candidates? (singleton-list-of-test #'candidate?))
@@ -142,7 +149,7 @@
 
 (defun thought-part? (thing)
   (and (text-part? thing)
-       (get-thought-flag thing)))
+       (get-thought thing)))
 
 (deff code-execution-result-part?
     (is-object-test '(:code-execution-result))
@@ -202,69 +209,60 @@
           () "Role must be a string or NIL.")
   (assert (list-of-parts? parts)
           () "Parts must be a list or NIL.")
-  (let ((content (make-hash-table :test 'equal)))
+  (let ((content (object :parts parts)))
     (when role
-      (setf (gethash "role" content) role))
-    (setf (gethash "parts" content) parts)
+      (setf (get-role content) role))
     content))
 
 (defun function-call (&key name args)
   "Creates a function call object with the specified NAME and ARGS.
    Returns a hash table representing the function call structure."
-  (let ((call (make-hash-table :test 'equal)))
-    (setf (gethash "name" call) name)
-    (setf (gethash "args" call) args)
-    call))
+  (object :name name :args args))
 
 (defun function-declaration (&key name description behavior
                                (parameters nil parameters-supplied-p) parametersJsonSchema response responseJsonSchema)
   "Creates a function declaration object with the specified NAME, DESCRIPTION,
    BEHAVIOR, PARAMETERS, PARAMETERS-JSON-SCHEMA, RESPONSE, and RESPONSE-JSON-SCHEMA."
-  (let ((declaration (make-hash-table :test 'equal)))
-    (setf (gethash "name" declaration) name)
-    (setf (gethash "description" declaration) description)
+  (let ((declaration (object :name name :description description)))
     (when behavior
       (unless (eq behavior :blocking)
         (error "Only :blocking behavior is supported, got ~s." behavior))
-      (setf (gethash "behavior" declaration) behavior))
+      (setf (get-behavior declaration) behavior))
     (when parameters-supplied-p
-      (setf (gethash "parameters" declaration) parameters))
+      (setf (get-parameters declaration) parameters))
     (when parametersJsonSchema
-      (setf (gethash "parametersJsonSchema" declaration) parametersJsonSchema))
+      (setf (get-parameters-json-schema declaration) parametersJsonSchema))
     (when response
-      (setf (gethash "response" declaration) response))
+      (setf (get-response declaration) response))
     (when responseJsonSchema
-      (setf (gethash "responseJsonSchema" declaration) responseJsonSchema))
+      (setf (get-response-json-schema declaration) responseJsonSchema))
     declaration))
 
 (defun function-response (&key name response)
   "Creates a function response object with the specified NAME and RESPONSE.
    Returns a hash table representing the function response structure."
-  (let ((resp (make-hash-table :test 'equal)))
-    (setf (gethash "name" resp) name)
-    (setf (gethash "response" resp) response)
-    resp))
+  (object :name name :response response))
 
 (defun part (data &key metadata thought thought-signature)
   "Creates a part object for content. The DATA can be a string (text),
    a blob, a function call, a function response, file data, executable code,
    or a code execution result. Optional METADATA, THOUGHT, and THOUGHT-SIGNATURE
    can be included. Returns a hash table representing the part."
-  (let ((part (make-hash-table :test 'equal)))
-    (cond ((stringp data) (setf (gethash "text" part) data))
-          ((blob? data) (setf (gethash "inlineData" part) data))
-          ((function-call? data) (setf (gethash "functionCall" part) data))
-          ((function-response? data) (setf (gethash "functionResponse" part) data))
-          ((file-data? data) (setf (gethash "fileData" part) data))
-          ((executable-code? data) (setf (gethash "executableCode" part) data))
-          ((code-execution-result? data) (setf (gethash "codeExecutionResult" part) data))
+  (let ((part (object)))
+    (cond ((stringp data)                (setf (get-text part)                  data))
+          ((blob? data)                  (setf (get-inline-data part)           data))
+          ((function-call? data)         (setf (get-function-call part)         data))
+          ((function-response? data)     (setf (get-function-response part)     data))
+          ((file-data? data)             (setf (get-file-data part)             data))
+          ((executable-code? data)       (setf (get-executable-code part)       data))
+          ((code-execution-result? data) (setf (get-code-execution-result part) data))
           (t (error "Unrecognized data: ~s" data)))
     (when metadata
-      (setf (gethash "metadata" part) metadata))
+      (setf (get-metadata part) metadata))
     (when thought
-      (setf (gethash "thought" part) thought))
+      (setf (get-thought part) thought))
     (when thought-signature
-      (setf (gethash "thoughtSignature" part) thought-signature))
+      (setf (get-thought-signature part) thought-signature))
     part))
 
 (defun schema (&key type format title description
@@ -303,22 +301,20 @@
                    minimum minimum-supplied-p
                    maximum maximum-supplied-p))
 
-  (let ((schema (make-hash-table :test 'equal)))
-    (setf (gethash "type" schema) (encode-schema-type-enum type))
+  (let ((schema (object)))
+    (setf (get-type schema) type)
     (when format
-      (setf (gethash "format" schema) format))
+      (setf (get-format schema) format))
     (when items
-      (setf (gethash "items" schema) items))
+      (setf (get-items schema) items))
     (when title
-      (setf (gethash "title" schema) title))
+      (setf (get-title schema) title))
     (when description
-      (setf (gethash "description" schema) description))
+      (setf (get-description schema) description))
     (when nullable-supplied-p
-      (setf (gethash "nullable" schema) nullable))
+      (setf (get-nullable schema) nullable))
     (when properties-supplied-p
-      (setf (gethash "properties" schema) properties))
+      (setf (get-properties schema) properties))
     (when required-supplied-p
-      (setf (gethash "required" schema) required))
+      (setf (get-required schema) required))
     schema))
-
-

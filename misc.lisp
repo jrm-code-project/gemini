@@ -83,6 +83,18 @@
     (keyword (keyword->keystring thing))
     (string thing)))
 
+(defun object (&rest fields)
+  "Creates an object with the specified FIELDS.
+   Returns a hash table representing the object structure."
+  (let ((object (make-hash-table :test 'equal)))
+    (let iter ((fields fields))
+      (when fields
+        (let ((field-name (->keystring (first fields)))
+              (field-value (second fields)))
+          (setf (gethash field-name object) field-value))
+        (iter (cddr fields))))
+    object))
+
 (defun keys (thing)
   "Returns a list of keys from an alist or a hash table.
    Signals an error if THING is neither an alist nor a hash table."
@@ -160,6 +172,41 @@
             ((hash-table-p thing) (or (gethash key thing)
                                       (gethash (->keystring key) thing)))
             (t (error "Can't get value for ~s from ~s" key thing))))))
+
+(defun object-set-function (keyword)
+  "Returns a function that sets the value associated with KEYWORD
+   in an alist or hash table."
+  (let ((key (->keyword keyword)))
+    (lambda (thing new-value)
+      (cond ((alist? thing) (let ((entry (assoc key thing :key #'->keyword)))
+                              (if entry
+                                  (setf (cdr entry) new-value)
+                                  (error "Key ~s not found in alist ~s" key thing))))
+            ((hash-table-p thing) (if (gethash key thing)
+                                      (setf (gethash key thing) new-value)
+                                      (setf (gethash (->keystring key) thing) new-value)))
+            (t (error "Can't set value for ~s in ~s" key thing))))))
+
+(defmacro define-field (name getter setter)
+  `(progn
+     (deff ,getter (object-ref-function ,name)
+         ,(format nil "Retrieves the '~a' field from an object." name))
+     (deff ,setter (object-set-function ,name)
+         ,(format nil "Sets the '~a' field in an object." name))
+     (defsetf ,getter ,setter)))
+
+(defmacro define-standard-field (name)
+  (let ((getter-name (intern (format nil "GET-~A" (string-upcase (symbol-name name))) (find-package "GEMINI")))
+        (setter-name (intern (format nil "SET-~A!" (string-upcase (symbol-name name))) (find-package "GEMINI"))))
+    `(PROGN
+       (DEFINE-FIELD ,name ,getter-name ,setter-name)
+       (EXPORT ',getter-name))))
+
+(defmacro define-standard-fields (&rest names)
+  `(progn
+     ,@(mapcar (lambda (name)
+                 `(define-standard-field ,name))
+               names)))
 
 (defun function-minimum-arity (func)
   (collect-length

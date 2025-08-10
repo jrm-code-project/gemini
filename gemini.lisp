@@ -39,10 +39,10 @@
    Provides a default tools object for generation."
   (if (boundp '*tools*)
       *tools*
-    (let ((tools (make-hash-table :test 'equal)))
+    (let ((tools (object)))
       (let ((function-declarations (default-function-declarations)))
         (when function-declarations
-          (setf (gethash "functionDeclarations" tools) function-declarations)))
+          (setf (get-function-declarations tools) function-declarations)))
       (unless (zerop (hash-table-count tools))
         tools))))
 
@@ -52,72 +52,72 @@
    related to candidate generation, safety, and response formatting."
   (if (boundp '*generation-config*)
       *generation-config*
-      (let ((gen-config (make-hash-table :test 'equal)))
+      (let ((gen-config (object)))
         (let ((candidate-count (default-candidate-count)))
           (when candidate-count
-            (setf (gethash "candidateCount" gen-config) candidate-count)))
+            (setf (get-candidate-count gen-config) candidate-count)))
         (let ((enable-advanced-civic-answers (default-enable-advanced-civic-answers)))
           (when enable-advanced-civic-answers
-            (setf (gethash "enableAdvancedCivicAnswers" gen-config) enable-advanced-civic-answers)))
+            (setf (get-enable-advanced-civic-answers gen-config) enable-advanced-civic-answers)))
         (let ((frequency-penalty (default-frequency-penalty)))
           (when frequency-penalty
-            (setf (gethash "frequencyPenalty" gen-config) frequency-penalty)))
+            (setf (get-frequency-penalty gen-config) frequency-penalty)))
         (let ((max-output-tokens (default-max-output-tokens)))
           (when max-output-tokens
-            (setf (gethash "maxOutputTokens" gen-config) max-output-tokens)))
+            (setf (get-max-output-tokens gen-config) max-output-tokens)))
         (let ((media-resolution (default-media-resolution)))
           (when media-resolution
-            (setf (gethash "mediaResolution" gen-config) media-resolution)))
+            (setf (get-media-Resolution gen-config) media-resolution)))
         (let ((presence-penalty (default-presence-penalty)))
           (when presence-penalty
-            (setf (gethash "presencePenaly" gen-config) presence-penalty)))
+            (setf (get-presence-penalty gen-config) presence-penalty)))
         (let ((response-logprobs (default-response-logprobs)))
           (when response-logprobs
-            (setf (gethash "responseLogprobs" gen-config) response-logprobs)))
+            (setf (get-response-logprobs gen-config) response-logprobs)))
         (let ((logprobs (default-logprobs)))
           (when logprobs
-            (assert (gethash "responseLogprobs" gen-config)
+            (assert (get-response-logprobs gen-config)
                     () "Response logprobs must be set when logprobs is set.")
-            (setf (gethash "logprobs" gen-config) logprobs)))
+            (setf (get-logprobs gen-config) logprobs)))
         (let ((response-mime-type (default-response-mime-type)))
           (when response-mime-type
-            (setf (gethash "responseMimeType" gen-config) response-mime-type)))
+            (setf (get-response-mime-type gen-config) response-mime-type)))
         (let ((response-modalities (default-response-modalities)))
           (when response-modalities
-            (setf (gethash "responseModalities" gen-config) response-modalities)))
+            (setf (get-response-modalities gen-config) response-modalities)))
         (let ((response-schema (default-response-schema)))
           (when response-schema
-            (assert (gethash "responseMimeType" gen-config)
+            (assert (get-response-mime-type gen-config)
                     () "Response MIME type must be set.")
-            (setf (gethash "responseSchema" gen-config) response-schema)))
+            (setf (get-response-schema gen-config) response-schema)))
         (let ((response-json-schema (default-response-json-schema)))
           (when response-json-schema
-            (assert (gethash "responseMimeType" gen-config)
+            (assert (get-response-mime-type gen-config)
                     () "Response MIME type must be set.")
-            (assert (not (gethash "responseSchema" gen-config))
+            (assert (not (get-response-schema gen-config))
                     () "Response schema must not be set when response JSON schema is set.")
-            (setf (gethash "responseJsonSchema" gen-config) response-json-schema)))
+            (setf (get-response-json-schema gen-config) response-json-schema)))
         (let ((seed (default-seed)))
           (when seed
-            (setf (gethash "seed" gen-config) seed)))
+            (setf (get-seed gen-config) seed)))
         (let ((speech-config (default-speech-config)))
           (when speech-config
-            (setf (gethash "speechConfig" gen-config) speech-config)))
+            (setf (get-speech-config gen-config) speech-config)))
         (let ((stop-sequences (default-stop-sequences)))
           (when stop-sequences
-            (setf (gethash "stopSequences" gen-config) stop-sequences)))
+            (setf (get-stop-Sequences gen-config) stop-sequences)))
         (let ((temperature (default-temperature)))
           (when temperature
-            (setf (gethash "temperature" gen-config) temperature)))
+            (setf (get-temperature gen-config) temperature)))
         (let ((thinking-config (default-thinking-config)))
           (when thinking-config
-            (setf (gethash "thinkingConfig" gen-config) thinking-config)))
+            (setf (get-thinking-config gen-config) thinking-config)))
         (let ((top-k (default-top-k)))
           (when top-k
-            (setf (gethash "topK" gen-config) top-k)))
+            (setf (get-top-k gen-config) top-k)))
         (let ((top-p (default-top-p)))
           (when top-p
-            (setf (gethash "topP" gen-config) top-p)))
+            (setf (get-top-p gen-config) top-p)))
         (unless (zerop (hash-table-count gen-config))
           gen-config))))
 
@@ -153,8 +153,7 @@
   (list (car arg)
         (default-process-arg-value
          (cdr arg)
-         (cdr (assoc (car arg) schema
-                     :key #'->keyword)))))
+         (funcall (object-ref-function (car arg)) schema))))
           
 (defun default-process-args (args schema)
   "Processes a list of arguments based on the provided schema.
@@ -166,28 +165,22 @@
          (args (get-args function-call-part))
          (functions (standard-functions-and-handlers))
          (entry (assoc name functions :key #'get-name :test #'equal))
-         ;;(ignore1 (format t "~&Processing function call: ~a, entry ~s~%" name entry))
          (schema (and entry
                       (get-properties
                        (get-parameters
                         (car entry)))))
-         (handler (and entry (cdr entry)))
-         (response-part (make-hash-table :test 'equal)))
+         (handler (and entry (cdr entry))))
     (format *trace-output* "~&;; Processing function call: ~a~%" name)
-    (setf (gethash "functionResponse" response-part)
-          (function-response
-           :name name
-           :response (cond ((null entry)
-                            `((:error . ,(format nil "No entry for ~s." name))))
-                           ((null handler)
-                            `((:error . ,(format nil "No handler for ~s." name))))
-                           ((not (functionp handler))
-                            `((:error . ,(format nil "Handler for ~s is not a function." name))))
-                           (t (let* ((answer (apply handler (default-process-args args schema)))
-                                     (response (make-hash-table :test 'equal)))
-                                (setf (gethash "result" response) answer)
-                                response)))))
-    response-part))
+    (object :function-response
+            (function-response
+             :name name
+             :response (cond ((null entry)
+                              (object :error (format nil "No entry for ~s." name)))
+                             ((null handler)
+                              (object :error (format nil "No handler for ~s." name)))
+                             ((not (functionp handler))
+                              (object :error (format nil "Handler for ~s is not a function." name)))
+                             (t (object :result (apply handler (default-process-args args schema)))))))))
 
 (defun default-process-function-calls (parts)
   "Processes a list of function call part objects.
@@ -221,6 +214,9 @@
         ;(format t "~&History: ~s~%" *history*)
         (process-thoughts thoughts)
         (cond ((some #'function-call-part? parts) (default-process-function-calls parts))
+              ((every #'text-part? parts)
+               (dolist (part (butlast parts) (get-text (car (last parts))))
+                 (format t "~&~a~%" (get-text part))))
               ((singleton-list-of-parts? parts) (default-process-part (first parts)))
               (t parts)))
       content))
@@ -282,29 +278,28 @@
    *OUTPUT-PROCESSOR*."
   ;;(format t "~&Contents: ~s~%" (dehashify contents))
   (setq *prior-model* *model*)
-  (let* ((payload (make-hash-table :test 'equal))
-         (*history*
+  (let* ((*history*
            (cond ((content? contents) (cons contents *history*))
                  ((part? contents) (cons (content :parts (list contents) :role "user") *history*))
                  ((stringp contents) (cons (content :parts (list (part contents)) :role "user") *history*))
                  ((list-of-content? contents) (revappend contents *history*))
                  ((list-of-parts? contents) (cons (content :parts contents :role "user") *history*))
                  ((list-of-strings? contents) (cons (content :parts (mapcar #'part contents) :role "user") *history*))
-                 (t (error "Unrecognized contents: ~s" contents)))))
+                 (t (error "Unrecognized contents: ~s" contents))))
+         (payload (object :contents (reverse *history*))))
     (setq *prior-history* *history*)
-    (setf (gethash "contents" payload) (reverse *history*))
     (when cached-content
-      (setf (gethash "cachedContent" payload) cached-content))
+      (setf (get-cached-content payload) cached-content))
     (when generation-config
-      (setf (gethash "generationConfig" payload) generation-config))
+      (setf (get-generation-config payload) generation-config))
     (when safety-settings
-      (setf (gethash "safetySettings" payload) safety-settings))
+      (setf (get-safety-settings payload) safety-settings))
     (when system-instruction
-      (setf (gethash "systemInstruction" payload) system-instruction))
+      (setf (get-system-instruction payload) system-instruction))
     (when tools
-      (setf (gethash "tools" payload) tools))
+      (setf (get-tools payload) tools))
     (when tool-config
-      (setf (gethash "toolConfig" payload) tool-config))
+      (setf (get-tool-config payload) tool-config))
     (funcall *output-processor* (%invoke-gemini *model* payload))))
 
 (defun gemini-continue (content)

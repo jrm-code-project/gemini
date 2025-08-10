@@ -2,6 +2,9 @@
 
 (in-package "GEMINI")
 
+(defparameter *enable-eval* t
+  "If true, enables the Gemini model to evaluate Lisp expressions.  This is a powerful feature that should be used with caution.  Set to t to ask before evaluation, to :yolo to allow the model to evaluate any expression.  If nil, evaluation is disabled.")
+
 (defparameter *enable-interaction* t
   "If true, enables the Gemini model to interact with the user via read and yes-or-no prompts.")
 
@@ -49,9 +52,9 @@
         :description "Returns true if the given expression can be evaluated in the Lisp environment.  True for Lisp atoms and complete s-expressions, false for free-form text."
         :behavior :blocking
         :parameters (schema :type :object
-                            :properties (list
-                                         (cons
-                                          "string" (schema :type :string)))
+                            :properties (object :string
+                                          (schema :type :string
+                                                  :description "The string to check if it is a complete s-expression or a single Lisp atom."))
                             :required (list "string"))
         :response (schema :type :boolean))
        (lambda (&key string)
@@ -69,13 +72,33 @@
     (when *enable-lisp-introspection*
       (cons
        (function-declaration
-        :name "eval"
-        :description "Evaluates an expression and returns the printed representation of the result."
+        :name "describe"
+        :description "Describe the given symbol using the Common Lisp `describe` function."
         :behavior :blocking
         :parameters (schema :type :object
-                            :properties (list
-                                         (cons
-                                          "string" (schema :type :string)))
+                            :properties (object :symbol
+                                          (schema :type :string
+                                                  :description "The name of the symbol to describe."))
+                            :required (list "symbol"))
+        :response (schema :type :string
+                          :description "The description of symbol, it's value, it's documentation, and any other relevant information.  Returns an error message if the symbol is not found."))
+       (lambda (&key symbol)
+         (let ((sym (find-symbol (string-upcase symbol))))
+           (if sym
+               (with-output-to-string (*standard-output*)
+                 (describe sym))
+               "Error: Symbol not found.")))))
+
+    (when *enable-eval*
+      (cons
+       (function-declaration
+        :name "eval"
+        :description "Evaluates an expression and returns the printed representation of the result.  If evaluation can produce permanent side effects, get positive confirmation from the user before calling this function."
+        :behavior :blocking
+        :parameters (schema :type :object
+                            :properties (object :string
+                                                (schema :type :string
+                                                        :description "The string containing the Lisp expression to evaluate.  This should be a complete s-expression or a single Lisp atom."))
                             :required (list "string"))
         :response (schema :type :string
                           :description "The printed representation of the result of evaluating the expression, or an error message if the expression cannot be evaluated."))
@@ -83,10 +106,20 @@
          (handler-case
              (let* ((narrow-string (str:trim string))
                     (length (length narrow-string)))
-               (multiple-value-bind (form count) (read-from-string (str:trim string))
-                 (if (= count length)
-                     (format nil "~s" (eval form))
-                     "Error: Expression not fully read.")))
+               (if (or (eq *enable-eval* :yolo)
+                       (yes-or-no-p (format nil "Do you really want to evaluate ~s?" narrow-string)))
+                   (multiple-value-bind (form count) (read-from-string (str:trim string))
+                     (if (= count length)
+                         (progn
+                           (format *trace-output* "~&;; Evaluating: ~s~%" form)
+                           (finish-output *trace-output*)
+                           (let ((values (multiple-value-list (eval form))))
+                             (cond ((null values) (format nil "~&;; No values~%"))
+                                   ((= (length values) 1)
+                                    (format nil "~&;; Value: ~S~%" (car values)))
+                                   (t (format nil "~&;; Values:~%~{;;   * ~S~%~}" values)))))
+                         "Error: Expression not fully read."))
+                   "**Evaluation rejected by the user.**"))
            (error () "Error: Expression could not be evaluated.")))))
 
     (when *enable-web-functions*
@@ -96,9 +129,9 @@
         :description "Performs an HTTP GET request to the specified URL and returns the response body as a string."
         :behavior :blocking
         :parameters (schema :type :object
-                            :properties (list
-                                         (cons
-                                          "url" (schema :type :string)))
+                            :properties (object :url
+                                          (schema :type :string
+                                                  :description "The URL to send the GET request to."))
                             :required (list "url"))
         :response (schema :type :string))
        (lambda (&key url)
@@ -111,9 +144,9 @@
         :description "Checks if a symbol is bound in the Lisp environment."
         :behavior :blocking
         :parameters (schema :type :object
-                            :properties (list
-                                         (cons
-                                          "symbol" (schema :type :string)))
+                            :properties (object :symbol
+                                          (schema :type :string
+                                                  :description "The name of the symbol to check."))
                             :required (list "symbol"))
         :response (schema :type :boolean))
        (lambda (&key symbol)
@@ -127,12 +160,12 @@
       (cons
        (function-declaration
         :name "isSymbolFbound"
-        :description "Checks if a symbol is fbound in the Lisp environment."
+        :description "Predicte to check if a symbol is fbound in the Lisp environment."
         :behavior :blocking
         :parameters (schema :type :object
-                            :properties (list
-                                         (cons
-                                          "symbol" (schema :type :string)))
+                            :properties (object :symbol 
+                                          (schema :type :string
+                                                  :description "The name of the symbol to check."))
                             :required (list "symbol"))
         :response (schema :type :boolean))
        (lambda (&key symbol)
@@ -146,12 +179,12 @@
       (cons
        (function-declaration
         :name "isSymbolValueBoolean"
-        :description "Checks if the value of a symbol is a boolean in the Lisp environment."
+        :description "Predicate to check if the value of a symbol is a boolean in the Lisp environment."
         :behavior :blocking
         :parameters (schema :type :object
-                            :properties (list
-                                         (cons
-                                          "symbol" (schema :type :string)))
+                            :properties (object :symbol
+                                          (schema :type :string
+                                                  :description "The name of the symbol to check."))
                             :required (list "symbol"))
         :response (schema :type :boolean))
        (lambda (&key symbol)
@@ -168,12 +201,12 @@
       (cons
        (function-declaration
         :name "isSymbolValueInteger"
-        :description "Checks if the value of a symbol is an integer in the Lisp environment."
+        :description "Predicate to check if the value of a symbol is an integer in the Lisp environment."
         :behavior :blocking
         :parameters (schema :type :object
-                            :properties (list
-                                         (cons
-                                          "symbol" (schema :type :string)))
+                            :properties (object :symbol
+                                          (schema :type :string
+                                                  :description "The name of the symbol to check."))
                             :required (list "symbol"))
         :response (schema :type :boolean))
        (lambda (&key symbol)
@@ -188,12 +221,12 @@
       (cons
        (function-declaration
         :name "isSymbolValueString"
-        :description "Checks if the value of a symbol is a string in the Lisp environment."
+        :description "Predicate to check if the value of a symbol is a string in the Lisp environment."
         :behavior :blocking
         :parameters (schema :type :object
-                            :properties (list
-                                         (cons
-                                          "symbol" (schema :type :string)))
+                            :properties (object :symbol
+                                          (schema :type :string
+                                                  :description "The name of the symbol to check."))
                             :required (list "symbol"))
         :response (schema :type :boolean))
        (lambda (&key symbol)
@@ -262,9 +295,9 @@
         :description "Loads an ASDF system by name."
         :behavior :blocking
         :parameters (schema :type :object
-                            :properties (list
-                                         (cons
-                                          "system" (schema :type :string)))
+                            :properties (object :system
+                                          (schema :type :string
+                                                  :description "The name of the system to load."))
                             :required (list "system"))
         :response (schema :type :string))
        (lambda (&key system)
@@ -277,9 +310,9 @@
         :description "Loads a Quicklisp system by name."
         :behavior :blocking
         :parameters (schema :type :object
-                            :properties (list
-                                         (cons
-                                          "system" (schema :type :string)))
+                            :properties (object :system
+                                          (schema :type :string
+                                                  :description "The name of the system to load."))
                             :required (list "system"))
         :response (schema :type :string))
        (lambda (&key system)
@@ -355,9 +388,9 @@
       :description "Print a string for display to the user."
       :behavior :blocking
       :parameters (schema :type :object
-                          :properties (list
-                                       (cons
-                                        "string" (schema :type :string)))
+                          :properties (object :string
+                                              (schema :type :string
+                                                      :description "The string to print."))
                           :required (list "string")))
      (lambda (&key string)
        (print string)
@@ -370,9 +403,9 @@
         :description "Returns the printed representation of the value of a symbol in the Lisp environment."
         :behavior :blocking
         :parameters (schema :type :object
-                            :properties (list
-                                         (cons
-                                          "symbol" (schema :type :string)))
+                            :properties (object :symbol
+                                          (schema :type :string
+                                                  :description "The name of the symbol to retrieve the value of."))
                             :required (list "symbol"))
         :response (schema :type :string
                           :description "The printed representation of the value of symbol, or an error message if the symbol is not found."))
@@ -389,9 +422,9 @@
         :description "Prompts the user for input and returns the response.  Do not hesitate to use this function to ask questions of the user or to get input from the user."
         :behavior :blocking
         :parameters (schema :type :object
-                            :properties (list
-                                         (cons
-                                          "prompt" (schema :type :string)))
+                            :properties (object :prompt
+                                          (schema :type :string
+                                                  :description "The prompt to send to the user.  This should be a complete sentence or question."))
                             :required (list "prompt"))
         :response (schema :type :string
                           :description "The user's input response."))
@@ -405,9 +438,9 @@
         :description "Prompts the LLM with a string and returns the response.  Use this to ask questions of the LLM or to get input from the LLM."
         :behavior :blocking
         :parameters (schema :type :object
-                            :properties (list
-                                         (cons
-                                          "prompt" (schema :type :string)))
+                            :properties (object :prompt
+                                          (schema :type :string
+                                                  :description "The prompt to send to the LLM.  This should be a complete sentence or question."))
                             :required (list "prompt"))
         :response (schema :type :string
                           :description "The LLM's response to the prompt."))
@@ -421,9 +454,9 @@
       :description "Returns a random integer between 0 and the given maximum value (exclusive).  Use this to generate random numbers."
       :behavior :blocking
       :parameters (schema :type :object
-                          :properties (list
-                                       (cons
-                                        "max" (schema :type :integer)))
+                          :properties (object :max
+                                              (schema :type :integer
+                                                      :description "The maximum value for the random integer.  Must be a positive integer."))
                           :required (list "max"))
       :response (schema :type :integer))
      (lambda (&key max)
@@ -453,11 +486,12 @@
         :name "symbolValueAsBoolean"
         :description "Returns the boolean value of a symbol in the Lisp environment.  Returns false if symbol is not bound to a boolean."
         :behavior :blocking
-        :parameters (schema :type :object
-                            :properties (list
-                                         (cons
-                                          "symbol" (schema :type :string)))
-                            :required (list "symbol"))
+        :parameters (schema
+                     :type :object
+                     :properties (object :symbol
+                                         (schema :type :string
+                                                 :description "The name of the symbol to retrieve the value of."))
+                     :required (list "symbol"))
         :response (schema :type :string
                           :description "The boolean value of symbol."))
        (lambda (&key symbol)
@@ -473,9 +507,9 @@
         :description "Returns the integer value of a symbol in the Lisp environment.  Returns 0 if symbol value is not an integer."
         :behavior :blocking
         :parameters (schema :type :object
-                            :properties (list
-                                         (cons
-                                          "symbol" (schema :type :string)))
+                            :properties (object :symbol
+                                          (schema :type :string
+                                                  :description "The name of the symbol to retrieve the value of."))
                             :required (list "symbol"))
         :response (schema :type :string
                           :description "The integer value of symbol."))
@@ -491,13 +525,15 @@
         :name "symbolValueAsString"
         :description "Returns the value of a symbol in the Lisp environment."
         :behavior :blocking
-        :parameters (schema :type :object
-                            :properties (list
-                                         (cons
-                                          "symbol" (schema :type :string)))
-                            :required (list "symbol"))
-        :response (schema :type :string
-                          :description "The string value of symbol.  Return the empty string if symbol is not bound to a string."))
+        :parameters (schema
+                     :type :object
+                     :properties (object :symbol
+                                         (schema :type :string
+                                                 :description "The name of the symbol to retrieve the value of."))
+                     :required (list "symbol"))
+        :response (schema
+                   :type :string
+                   :description "The string value of symbol.  Return the empty string if symbol is not bound to a string."))
        (lambda (&key symbol)
          (let ((sym (find-symbol (string-upcase symbol))))
            (if (and sym
@@ -513,9 +549,8 @@
         :description "Returns a list of systems available to load via Quicklisp apropos of a search string."
         :behavior :blocking
         :parameters (schema :type :object
-                            :properties (list
-                                         (cons
-                                          "term" (schema :type :string)))
+                            :properties (object :term
+                                                (schema :type :string))
                             :required (list "term"))
         :response (schema :type :array
                           :items (schema :type :string)))
@@ -529,9 +564,9 @@
         :description "Returns a description of a system available in ASDF."
         :behavior :blocking
         :parameters (schema :type :object
-                            :properties (list
-                                         (cons
-                                          "system" (schema :type :string)))
+                            :properties (object :system
+                                          (schema :type :string
+                                                  :description "The name of the system to describe."))
                             :required (list "system"))
         :response (schema :type :array
                           :items (schema :type :string)))
@@ -558,37 +593,31 @@
         :description "Search the Web for pages about a topic."
         :behavior :blocking
         :parameters (schema :type :object
-                            :properties (list
-                                         (cons
-                                          "searchTerms" (schema :type :string)))
+                            :properties (object :search-terms
+                                                (schema :type :string
+                                                        :description "The search terms to use for the web search.  Use spaces to separate terms."))
                             :required (list "searchTerms"))
         :response (schema :type :object
-                          :properties (list
-                                       (cons "items"
-                                             (schema :type :array
-                                                     :items (schema :type :object
-                                                                    :properties (list
-                                                                                 (cons "title" (schema :type :string))
-                                                                                 (cons "link" (schema :type :string))
-                                                                                 (cons "snippet" (schema :type :string)))
-                                                                    :required (list "title" "link" "snippet")))))
+                          :properties (object :items
+                                              (schema :type :array
+                                                      :items (schema :type :object
+                                                                     :properties (object
+                                                                                  :title (schema :type :string)
+                                                                                  :link (schema :type :string)
+                                                                                  :snippet (schema :type :string))
+                                                                     :required (list "title" "link" "snippet"))))
                           :required (list "items")))
        (lambda (&key search-terms)
          (format *trace-output* "~&;; Search Terms: ~{~a~^ ~}~%" (str:split " " search-terms :omit-nulls t))
          (finish-output *trace-output*)
-         (let* ((results (web-search
-                          (str:join "+" (str:split " " search-terms :omit-nulls t))))
-                (items (get-items results))
-                (response (make-hash-table :test 'equal)))
-           (setf (gethash "items" response)
+         (object :items
                  (map 'list (lambda (item)
-                              (let ((response-item (make-hash-table :test 'equal)))
-                                (setf (gethash "title" response-item) (get-title item)
-                                      (gethash "link" response-item) (get-link item)
-                                      (gethash "snippet" response-item) (get-snippet item))
-                                response-item))
-                      items))
-           response))))
+                              (object :title (get-title item)
+                                      :link (get-link item)
+                                      :snippet (get-snippet item)))
+                      (get-items
+                       (web-search
+                        (str:join "+" (str:split " " search-terms :omit-nulls t)))))))))
 
     (when *enable-interaction*
       (cons
@@ -597,9 +626,9 @@
         :description "Asks a careful yes/no question and returns the response.  Use this for consequential questions that require a definitive yes or no answer."
         :behavior :blocking
         :parameters (schema :type :object
-                            :properties (list
-                                         (cons
-                                          "question" (schema :type :string)))
+                            :properties (object :question
+                                                (schema :type :string
+                                                        :description "The question to ask the user."))
                             :required (list "question"))
         :response (schema :type :boolean
                           :description "Returns true or false based on user input."))
@@ -615,10 +644,11 @@
         :description "Asks a y/n question and returns the response.  Use this for simple yes/no questions that do not require a careful answer."
         :behavior :blocking
         :parameters (schema :type :object
-                            :properties (list
-                                         (cons
-                                          "question" (schema :type :string)))
-                            :required (list "question"))
+                            :properties (object :question
+                                                 (schema :type :string
+                                                         :description "The question to ask the user."))
+
+                            :required (list "question")) ; The question is required.
         :response (schema :type :boolean
                           :description "Returns true or false based on user input."))
        (lambda (&key question)
