@@ -17,10 +17,12 @@
 (defparameter *enable-web-search* t
   "If true, enables the Gemini model to perform web searches.")
 
-(defvar *enable-recursive-prompt* t
+(defvar *enable-recursive-prompt* nil
   "If true, enables recursive prompting of the LLM.")
 
 (defun standard-functions-and-handlers ()
+  (append (mcp-functions-and-handlers)
+
   (remove
    nil
    (list
@@ -655,5 +657,52 @@
          (if (y-or-n-p question)
              +json-true+
              +json-false+))))
-    )))
+    ))))
+
+(defun mcp-functions-and-handlers ()
+  "Extracts the list of functions supplied by the MCP servers."
+  (fold-left (binary-compose-right #'append #'get-mcp-functions-and-handlers) nil *mcp-clients*))
+
+(defun get-mcp-functions-and-handlers (client)
+  "Returns the functions and handlers for the given MCP client."
+  (when (has-tools-capability? client)
+    (map 'list (lambda (tool) (convert-tool client tool)) (get-tools client))))
+
+(defun convert-tool (mcp-client tool)
+  "Converts an MCP tool to a function specification."
+  (let ((input-schema  (get-input-schema tool))
+        (output-schema (get-output-schema tool)))
+
+    (cons (function-declaration
+           :name (format nil "~a.~a" (get-name mcp-client) (get-name tool))
+           :description (get-description tool)
+           :behavior :blocking
+           :parameters (convert-input-schema input-schema)
+           :response (convert-output-schema output-schema))
+          (lambda (&rest args &key &allow-other-keys)
+            (call-tool mcp-client tool (apply #'object args))))))
+
+(defun convert-input-schema (input-schema)
+  (when input-schema
+    (schema :type :object
+            :properties (convert-properties (get-properties input-schema))
+            :required (get-required input-schema))))
+
+(defun convert-properties (properties)
+  (let ((props (object)))
+    (dolist (property properties)
+      (setf (gethash (car property) props)
+            (convert-property (cdr property))))
+    props))
+
+(defun convert-property (property)
+  (schema :type (->keyword (get-type property))
+          :description (get-description property)))
+
+(defun convert-output-schema (output-schema)
+  (when output-schema
+    (schema :type :object
+            :properties (convert-properties (get-properties output-schema))
+            :required (get-required output-schema))))
+
 

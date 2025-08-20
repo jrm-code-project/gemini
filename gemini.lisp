@@ -143,7 +143,7 @@
 (defun default-process-arg-value (arg schema)
   "Processes a single argument value based on the provided schema.
    Returns the processed value according to the type specified in the schema."
-  (ecase (get-type schema)
+  (ecase (get-type-enum schema)
     (:integer (if (integerp arg) arg (error "Expected integer, got ~s" arg)))
     (:string arg)))
 
@@ -182,53 +182,6 @@
                               (object :error (format nil "Handler for ~s is not a function." name)))
                              (t (object :result (apply handler (default-process-args args schema)))))))))
 
-(defun default-process-function-calls (parts)
-  "Processes a list of function call part objects.
-   Returns a list of processed function call responses."
-  (let ((function-calls
-          (remove-if-not #'function-call-part? parts)))
-    (mapc (lambda (part)
-            (when (text-part? part)
-              (format t "~&~a"
-                      (get-text part))))
-          (remove-if #'function-call-part? parts))
-    (if (null function-calls)
-        (error "No function calls found in parts: ~s" parts)
-        (invoke-gemini
-         (content :parts
-                  (mapcar (lambda (part)
-                            (default-process-function-call (get-function-call part)))
-                          function-calls)
-                  :role "function")))))
-
-(defun default-process-content (content)
-  "Processes a content object. If the role is 'model' and it contains
-   a single part, it processes that part. Otherwise, it returns the
-   content as is."
-  (if (equal (get-role content) "model")
-      (let* ((*history* (cons content *history*))
-             (raw-parts (get-parts content))
-             (thoughts (remove-if-not #'thought-part? raw-parts))
-             (parts (remove-if #'thought-part? raw-parts)))
-        (setq *prior-history* *history*)
-        ;(format t "~&History: ~s~%" *history*)
-        (process-thoughts thoughts)
-        (cond ((some #'function-call-part? parts) (default-process-function-calls parts))
-              ((every #'text-part? parts)
-               (dolist (part (butlast parts) (get-text (car (last parts))))
-                 (format t "~&~a~%" (get-text part))))
-              ((singleton-list-of-parts? parts) (default-process-part (first parts)))
-              (t parts)))
-      content))
-
-(defun default-process-candidate (candidate)
-  "Processes a candidate object from the API response.
-   Asserts that the 'finishReason' is 'STOP'.
-   Then processes the content of the candidate."
-  (unless (equal (get-finish-reason candidate) "STOP")
-    (error "Invalid finish reason: ~s" candidate))
-  (default-process-content (get-content candidate)))
-
 (defun process-usage-metadata (usage-metadata)
   "Processes usage metadata from the API response.
    Outputs the usage information to *trace-output*."
@@ -241,66 +194,141 @@
           (get-candidates-token-count usage-metadata)
           (get-total-token-count usage-metadata)))
 
-(defun default-process-response (response)
-  "Processes an API response object.
-   If the response contains one candidate, process that candidate.
-   Otherwise return the list of candidates."
-  (if (gemini-response? response)
-      (unwind-protect
-           (let ((candidates (get-candidates response)))
-             (if (singleton-list-of-candidates? candidates)
-                 (default-process-candidate (car candidates))
-                 candidates))
-        (let ((usage-metadata (get-usage-metadata response)))
-          (when usage-metadata
-            (process-usage-metadata usage-metadata))))
-      (error "Unrecognized Gemini response ~s" response)))
+(defun ->prompt (thing)
+  "Converts a thing into a list of content objects."
+  (cond ((content? thing) (list thing))
+        ((part? thing) (list (content :parts (list thing) :role "user")))
+        ((stringp thing) (list (content :parts (list (part thing)) :role "user")))
+        ((list-of-content? thing) thing)
+        ((list-of-parts? thing) (list (content :parts thing :role "user")))
+        ((list-of-strings? thing)
+         (list (content :parts (mapcar #'part thing) :role "user")))
+        (t (error "Unrecognized type for prompt: ~s" thing))))
+  
+(defun print-token-usage (results)
+    "Prints the token usage information from the results.
+     Returns the results unchanged."
+    (let ((usage-metadata (get-usage-metadata results)))
+      (when usage-metadata
+        (process-usage-metadata usage-metadata)))
+    results)
 
-(defvar *output-processor* #'default-process-response
-  "Function to process the output of the Gemini API.
-   Can be set to a custom function to handle the response differently.
-   Defaults to DEFAULT-PROCESS-RESPONSE.")
+(defun strip-thoughts-from-part (part)
+  (if (thought-part? part)
+      (progn (process-thought part)
+             nil)
+      part))
 
-(defun invoke-gemini (contents &key
-                      ((:model *model*) +default-model+)
-                      (cached-content (default-cached-content))
-                      (generation-config (default-generation-config))
-                      (tools (default-tools))
-                      (tool-config (default-tool-config))
-                      (safety-settings (default-safety-settings))
-                      (system-instruction (default-system-instruction)))
-  "Invokes the Gemini API with the specified MODEL and CONTENTS.
-   Optional arguments allow for custom CACHED-CONTENT, GENERATION-CONFIG,
-   TOOLS, TOOL-CONFIG, SAFETY-SETTINGS, and SYSTEM-INSTRUCTION.
-   The CONTENTS argument can be a content object, a part object, a string,
-   a list of content objects, a list of part objects, or a list of strings.
-   Returns the processed response from the API, as determined by
-   *OUTPUT-PROCESSOR*."
-  ;;(format t "~&Contents: ~s~%" (dehashify contents))
-  (setq *prior-model* *model*)
-  (let* ((*history*
-           (cond ((content? contents) (cons contents *history*))
-                 ((part? contents) (cons (content :parts (list contents) :role "user") *history*))
-                 ((stringp contents) (cons (content :parts (list (part contents)) :role "user") *history*))
-                 ((list-of-content? contents) (revappend contents *history*))
-                 ((list-of-parts? contents) (cons (content :parts contents :role "user") *history*))
-                 ((list-of-strings? contents) (cons (content :parts (mapcar #'part contents) :role "user") *history*))
-                 (t (error "Unrecognized contents: ~s" contents))))
-         (payload (object :contents (reverse *history*))))
-    (setq *prior-history* *history*)
-    (when cached-content
-      (setf (get-cached-content payload) cached-content))
-    (when generation-config
-      (setf (get-generation-config payload) generation-config))
-    (when safety-settings
-      (setf (get-safety-settings payload) safety-settings))
-    (when system-instruction
-      (setf (get-system-instruction payload) system-instruction))
-    (when tools
-      (setf (get-tools payload) tools))
-    (when tool-config
-      (setf (get-tool-config payload) tool-config))
-    (funcall *output-processor* (%invoke-gemini *model* payload))))
+(defun strip-thoughts-from-parts (parts)
+  (remove nil (map 'list #'strip-thoughts-from-part parts)))
+
+(defun strip-thoughts-from-content (content)
+  (let* ((parts* (strip-thoughts-from-parts (get-parts content))))
+    (when parts*
+      (let ((stripped (object :parts parts*)))
+        (when (get-role content)
+          (setf (get-role stripped) (get-role content)))
+        stripped))))
+
+(defun strip-thoughts-from-candidate (candidate)
+  (let ((content* (strip-thoughts-from-content (get-content candidate))))
+    (when content*
+      (let ((stripped (object :content content*)))
+        (when (get-finish-reason candidate)
+          (setf (get-finish-reason stripped) (get-finish-reason candidate)))
+        (when (get-index candidate)
+          (setf (get-index stripped) (get-index candidate)))
+        (when (get-citation-metadata candidate)
+          (setf (get-citation-metadata stripped) (get-citation-metadata candidate)))
+        stripped))))
+
+(defun strip-thoughts-from-candidates (candidates)
+  (remove nil (map 'list #'strip-thoughts-from-candidate candidates)))
+
+(defun strip-and-print-thoughts (results)
+  (let ((candidates* (strip-thoughts-from-candidates (get-candidates results))))
+    (when candidates*
+      (let ((stripped (object :candidates candidates*)))
+        (when (get-model-version results)
+          (setf (get-model-version stripped) (get-model-version results)))
+        (when (get-response-id results)
+          (setf (get-response-id stripped) (get-response-id results)))
+        (when (get-usage-metadata results)
+          (setf (get-usage-metadata stripped) (get-usage-metadata results)))
+        stripped))))
+
+(defun extract-function-calls-from-candidate (candidate)
+  (let ((content (get-content candidate)))
+    (when content
+      (remove-if-not #'function-call-part? (get-parts content)))))
+
+(defun extract-function-calls-from-results (results)
+  "Extracts function calls from the results.
+   Returns a list of function call parts if present, otherwise NIL."
+  (let ((candidates (get-candidates results)))
+    (when (and (consp candidates)
+               (null (cdr candidates)))
+      (extract-function-calls-from-candidate (car candidates)))))
+
+(defun candidate-as-text-string (candidate)
+  (let ((content (get-content candidate)))
+    (and content
+         (let ((parts (get-parts content)))
+           (apply #'concatenate 'string (map 'list #'get-text (remove-if-not #'text-part? parts)))))))
+
+(defun as-singleton-text-string (results)
+  (let ((candidates (get-candidates results)))
+    (when (and (consp candidates)
+               (null (cdr candidates)))
+      (candidate-as-text-string (car candidates)))))
+
+(defparameter *return-text-string* t
+  "If non-NIL, return the text string of the candidate instead of the candidate object.")
+
+(defun tail-call-functions (results)
+  (let ((function-calls (extract-function-calls-from-results results)))
+    (if function-calls
+        (let ((function-results (map 'list (compose #'default-process-function-call #'get-function-call)
+                                     function-calls)))
+          (invoke-gemini
+            (list (content :parts function-calls
+                           :role "model")
+                  (content :parts function-results
+                           :role "function"))))
+      (or (and *return-text-string* (as-singleton-text-string results))
+          results))))
+
+(defparameter *output-processor* (compose #'tail-call-functions #'strip-and-print-thoughts #'print-token-usage)
+    "The default output processor for the Gemini API.")
+
+(defun invoke-gemini (prompt &key
+                             ((:model *model*) +default-model+)
+                             (cached-content (default-cached-content))
+                             (generation-config (default-generation-config))
+                             (tools (default-tools))
+                             (tool-config (default-tool-config))
+                             (safety-settings (default-safety-settings))
+                             (system-instruction (default-system-instruction)))
+  (let ((prompt* (->prompt prompt)))
+    (assert (list-of-content? prompt*)
+            () "Prompt must be a list of content objects.")
+    (setq *prior-model* *model*)
+    (let* ((*history* (revappend prompt* *history*))
+           (payload (object :contents (reverse *history*))))
+      (setq *prior-history* *history*)
+      (when cached-content
+        (setf (get-cached-content payload) cached-content))
+      (when generation-config
+        (setf (get-generation-config payload) generation-config))
+      (when safety-settings
+        (setf (get-safety-settings payload) safety-settings))
+      (when system-instruction
+        (setf (get-system-instruction payload) system-instruction))
+      (when tools
+        (setf (get-tools payload) tools))
+      (when (and tools tool-config)
+        (setf (get-tool-config payload) tool-config))
+      (funcall *output-processor* (%invoke-gemini *model* payload)))))
 
 (defun gemini-continue (content)
   "Continues the conversation with the Gemini model using the provided CONTENT.

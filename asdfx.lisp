@@ -27,12 +27,13 @@
     (push (uiop:subpathname (user-homedir-pathname) ".config/common-lisp/source-registry.conf.d/") config-dirs)
 
     (let ((files '()))
-      (loop for dir-or-file in (delete-duplicates config-dirs :test #'equal)
-            do (cond ((uiop:file-exists-p dir-or-file)
-                      (push dir-or-file files))
-                     ((uiop:directory-exists-p dir-or-file)
-                      (loop for file in (uiop:directory-files dir-or-file "*.conf")
-                            do (push file files)))))
+      (dolist (dir-or-file (delete-duplicates config-dirs :test #'equal))
+        (cond ((uiop:file-exists-p dir-or-file)
+               (pushnew (truename dir-or-file) files :test #'equal))
+              ((uiop:directory-exists-p dir-or-file)
+               (dolist (file (uiop:directory-files dir-or-file "*.conf"))
+                 (pushnew (truename file) files :test #'equal)))))
+
       (nreverse files))))
 
 (defun parse-source-registry-config (file-path)
@@ -62,9 +63,9 @@
               (error (e)
                 (format *error-output* "~&Warning: Could not parse CL_SOURCE_REGISTRY environment variable: ~A~%" e)))
             ;; Assume it's a path list
-            (loop for path in (uiop:split-string env-var :separator (string (uiop:directory-separator-for-host)))
-                  unless (string= path "")
-                    do (push (list :tree (uiop:parse-unix-namestring path)) all-forms)))))
+            (dolist (path (uiop:split-string env-var :separator (string (uiop:directory-separator-for-host))))
+              (unless (string= path "")
+                (push (list :tree (uiop:parse-unix-namestring path)) all-forms))))))
 
     (nreverse all-forms)))
 
@@ -75,32 +76,33 @@
         (tree-dirs '())
         (exclusion-paths '())
         (inherit-p nil))
-    (loop for form in forms
-          do (cond ((and (listp form) (keywordp (car form)))
-                    (case (car form)
-                      (:tree
-                       (loop for path-designator in (cdr form)
-                             do (push (uiop:ensure-directory-pathname path-designator) tree-dirs)))
-                      (:directory
-                       (loop for path-designator in (cdr form)
-                             do (push (uiop:ensure-directory-pathname path-designator) direct-dirs)))
-                      (:exclude
-                       (loop for path-designator in (cdr form)
-                             do (push (uiop:ensure-pathname path-designator :wild-inferiors nil :ensure-directory nil) exclusion-paths)))
-                      (:inherit-configuration
-                       (setf inherit-p t))
-                      ;; ASDF has other directives like :module-relative-path, etc.
-                      ;; For simplicity, we'll focus on the most common ones.
-                      (t
-                       (format *error-output* "~&Warning: Unknown ASDF source registry directive: ~A~%" (car form)))))
-                   (t
-                    (format *error-output* "~&Warning: Malformed ASDF source registry form: ~A~%" form))))
+    (dolist (form forms)
+      (cond ((and (listp form) (keywordp (car form)))
+             (case (car form)
+               (:tree
+                (dolist (path-designator (cdr form))
+                  (push (uiop:ensure-directory-pathname path-designator) tree-dirs)))
+               (:directory
+                (dolist (path-designator (cdr form))
+                  (push (uiop:ensure-directory-pathname path-designator) direct-dirs)))
+               (:exclude
+                (dolist (path-designator (cdr form))
+                  (push (uiop:ensure-pathname path-designator :wild-inferiors nil :ensure-directory nil)
+                        exclusion-paths)))
+               (:inherit-configuration
+                (setf inherit-p t))
+               ;; ASDF has other directives like :module-relative-path, etc.
+               ;; For simplicity, we'll focus on the most common ones.
+               (t
+                (format *error-output* "~&Warning: Unknown ASDF source registry directive: ~A~%" (car form)))))
+            (t
+             (format *error-output* "~&Warning: Malformed ASDF source registry form: ~A~%" form))))
 
     ;; If :inherit-configuration is not explicitly present, ASDF still inherits by default
     ;; unless :ignore-inherited-configuration is used. For this "lister", assume inherit unless explicitly ignored.
     (when (or inherit-p (not (member :ignore-inherited-configuration (car forms))))
-      (loop for dir in (get-asdf-default-dirs)
-            do (push dir tree-dirs)))
+      (dolist (dir (get-asdf-default-dirs))
+        (push dir direct-dirs)))
 
     (values (nreverse direct-dirs)
             (nreverse tree-dirs)
@@ -108,22 +110,18 @@
 
 (defun is-excluded-p (pathname exclusion-paths)
   "Checks if a pathname matches any of the exclusion patterns."
-  (loop for exclude-pattern in exclusion-paths
-        when (uiop::pathname-match-p pathname exclude-pattern)
-          do (return t)
-        finally (return nil)))
+  (find pathname exclusion-paths :test #'uiop::pathname-match-p))
 
 (defun collect-asd-files (root-dir &key recursive p-exclude)
   "Collects .asd files from a directory, optionally recursively, with exclusions."
   (let ((found-files '()))
     (labels ((scan (current-dir)
                (unless (is-excluded-p current-dir p-exclude)
-                 (loop for file in (uiop:directory-files current-dir "*.asd")
-                       unless (is-excluded-p file p-exclude)
-                         do (push file found-files))
+                 (dolist (file (uiop:directory-files current-dir "*.asd"))
+                   (unless (is-excluded-p file p-exclude)
+                     (push file found-files)))
                  (when recursive
-                   (loop for subdir in (uiop:subdirectories current-dir)
-                         do (scan subdir))))))
+                   (mapc #'scan (uiop:subdirectories current-dir))))))
       (scan root-dir))
     (nreverse found-files)))
 
@@ -135,14 +133,14 @@
     (let ((system-names (make-hash-table :test #'equal))) ; Use hash table for efficient deduplication
 
       ;; Collect from direct directories
-      (loop for dir in direct-dirs
-            do (loop for file in (collect-asd-files dir :recursive nil :p-exclude exclusion-paths)
-                     do (setf (gethash (pathname-name file) system-names) t)))
+      (dolist (dir direct-dirs)
+        (dolist (file (collect-asd-files dir :recursive nil :p-exclude exclusion-paths))
+          (setf (gethash (pathname-name file) system-names) t)))
 
       ;; Collect from recursive directories
-      (loop for dir in tree-dirs
-            do (loop for file in (collect-asd-files dir :recursive t :p-exclude exclusion-paths)
-                     do (setf (gethash (pathname-name file) system-names) t)))
+      (dolist (dir tree-dirs)
+        (dolist (file (collect-asd-files dir :recursive t :p-exclude exclusion-paths))
+          (setf (gethash (pathname-name file) system-names) t)))
 
       ;; Convert hash table keys to a sorted list
-      (sort (loop for key being the hash-key of system-names collect key) #'string<))))
+      (sort (hash-table-keys system-names) #'string<))))

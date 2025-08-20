@@ -4,15 +4,24 @@
 
 (define-standard-fields
   :args
+  :autonym
   :behavior
+  :blob
   :cached-content
   :candidate-count
   :candidates
   :candidates-token-count
+  :capabilities
+  :citation-metadata
+  :client-info
   :code-execution-result
+  :command
   :content
+  :contents
+  :data
   :description
   :enable-advanced-civic-answers
+  :enum
   :executable-code
   :file-data
   :finish-reason
@@ -22,35 +31,70 @@
   :function-declarations
   :function-response
   :generation-config
+  :id 
+  :include-context
+  :index
   :inline-data
+  :input-schema
+  :instructions
   :items
+  :jsonrpc
+  :level
   :link
+  :location
   :logprobs
   :max-output-tokens
+  :max-tokens
+  :maximum
+  :mcp-servers
   :media-resolution
+  :message
+  :messages
   :metadata
+  :method
+  :mime-type
+  :minimum
+  :model-version
   :name
+  :next-cursor
   :nullable
+  :output-schema
   :parameters
   :parameters-json-schema
+  :params
   :parts
   :presence-penalty
+  :progress
+  :progress-token
   :prompt-token-count
+  :prompts
   :properties
+  :protocol-version
+  :reason
+  :request-id
+  :requested-schema
   :required
+  :resource-templates
+  :resources
   :response
+  :response-id
   :response-json-schema
   :response-logprobs
   :response-mime-type
   :response-modalities
   :response-schema
+  :result
   :role
   :safety-settings
+  :search-terms
   :seed
+  :server-info
   :snippet
   :speech-config
   :stop-sequences
+  :subscribe
   :system-instruction
+  :system-prompt
   :temperature
   :text
   :thinking-config
@@ -62,11 +106,15 @@
   :tools
   :top-k
   :top-p
+  :total
   :total-token-count
   ;; :type
-  :usage-metadata)
+  :uri
+  :uri-template
+  :usage-metadata
+  :version)
 
-(define-field :type %get-type %set-type!)
+(define-field :type %get-type)
 
 (defun decode-schema-type-enum (code)
   "Returns a schema type for the given CODE."
@@ -91,14 +139,22 @@
     (:array 5)
     (:object 6)))
 
-(defun get-type (schema)
+(defun get-type-enum (schema)
   "Retrieves the type of a schema object."
   (decode-schema-type-enum (%get-type schema)))
 
-(defun set-type! (schema type)
+(defun set-type-enum! (schema type)
   "Sets the type of a schema object to TYPE.
    Valid types are 'string', 'number', 'integer', 'boolean', 'object', 'array'."
   (setf (%get-type schema) (encode-schema-type-enum type)))
+
+(defsetf get-type-enum set-type-enum!)
+
+(defun get-type (object)
+  (%get-type object))
+
+(defun set-type! (object type)
+  (setf (%get-type object) type))
 
 (defsetf get-type set-type!)
 
@@ -107,7 +163,7 @@
     "Predicate to check if a thing is a valid blob object (inline data).")
 
 (deff candidate?
-    (is-object-test '(:content) '(:finish-reason :index :citation-metadata))
+    (is-object-test '(:content) '(:citation-metadata :finish-reason :index))
     "Predicate to check if a thing is a valid candidate object from the API response.")
 
 (deff singleton-list-of-candidates? (singleton-list-of-test #'candidate?))
@@ -302,7 +358,7 @@
                    maximum maximum-supplied-p))
 
   (let ((schema (object)))
-    (setf (get-type schema) type)
+    (setf (get-type-enum schema) type)
     (when format
       (setf (get-format schema) format))
     (when items

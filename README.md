@@ -93,7 +93,7 @@ To generate text from a prompt:
 
 ### Model selection
 ```common-lisp
-(gemini:invoke-gemini "Translate to French: Hello!" :model "gemini-pro")
+(gemini:invoke-gemini "Translate to French: Hello!" :model "gemini-2.5-pro")
 ```
 ## Configuration
 

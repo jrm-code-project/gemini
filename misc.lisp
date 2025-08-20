@@ -2,6 +2,11 @@
 
 (in-package "GEMINI")
 
+(defun ->boolean (thing)
+  (if (null thing)
+      nil
+      t))
+
 (defun deflow (string)
   "Removes newlines from STRING and replaces them with spaces, ensuring that the result is a single line."
   (let ((lines
@@ -163,50 +168,45 @@
          (null (cdr thing))
          (funcall predicate (car thing)))))
 
-(defun object-ref-function (keyword)
-  "Returns a function that retrieves the value associated with KEYWORD
-   in an alist or hash table. If the key is not found, it returns NIL."
-  (let ((key (->keyword keyword)))
-    (lambda (thing)
-      (cond ((alist? thing) (cdr (assoc key thing :key #'->keyword)))
-            ((hash-table-p thing) (or (gethash key thing)
-                                      (gethash (->keystring key) thing)))
-            (t (error "Can't get value for ~s from ~s" key thing))))))
+(defmacro define-field (name getter)
+  "Define a GET-<name> and (SETF GET-<name>) generic function."
+  `(PROGN
+     (DEFGENERIC ,getter (OBJECT)
+       (:DOCUMENTATION ,(format nil "Retrieves the '~a' field from an object." name))
+       (:METHOD ((OBJECT HASH-TABLE))
+         (OR (GETHASH ,(->keyword name) OBJECT)
+             (GETHASH ,(->keystring name) OBJECT)))
+       (:METHOD ((OBJECT LIST))
+         (CDR (ASSOC ,(->keyword name) OBJECT :KEY #'->KEYWORD))))
 
-(defun object-set-function (keyword)
-  "Returns a function that sets the value associated with KEYWORD
-   in an alist or hash table."
-  (let ((key (->keyword keyword)))
-    (lambda (thing new-value)
-      (cond ((alist? thing) (let ((entry (assoc key thing :key #'->keyword)))
-                              (if entry
-                                  (setf (cdr entry) new-value)
-                                  (error "Key ~s not found in alist ~s" key thing))))
-            ((hash-table-p thing) (if (gethash key thing)
-                                      (setf (gethash key thing) new-value)
-                                      (setf (gethash (->keystring key) thing) new-value)))
-            (t (error "Can't set value for ~s in ~s" key thing))))))
-
-(defmacro define-field (name getter setter)
-  `(progn
-     (deff ,getter (object-ref-function ,name)
-         ,(format nil "Retrieves the '~a' field from an object." name))
-     (deff ,setter (object-set-function ,name)
-         ,(format nil "Sets the '~a' field in an object." name))
-     (defsetf ,getter ,setter)))
+     (DEFGENERIC (SETF ,getter) (NEW-VALUE OBJECT)
+        (:DOCUMENTATION ,(format nil "Sets the '~a' field in an object." name))
+        (:METHOD (NEW-VALUE (OBJECT HASH-TABLE))
+           (SETF (GETHASH ,(->keyword name) OBJECT) NEW-VALUE))
+        (:METHOD (NEW-VALUE (OBJECT LIST))
+           (LET ((ENTRY (ASSOC ,(->keyword name) OBJECT :KEY #'->KEYWORD)))
+             (IF ENTRY
+                 (SETF (CDR ENTRY) NEW-VALUE)
+                 (ERROR "Key ~s not found in alist ~s" ,(->keyword name) OBJECT)))))))
 
 (defmacro define-standard-field (name)
-  (let ((getter-name (intern (format nil "GET-~A" (string-upcase (symbol-name name))) (find-package "GEMINI")))
-        (setter-name (intern (format nil "SET-~A!" (string-upcase (symbol-name name))) (find-package "GEMINI"))))
+  "Define a GET-<name> function and export it."
+  (let ((getter-name (intern (format nil "GET-~A" (string-upcase (symbol-name name))) (find-package "GEMINI"))))
     `(PROGN
-       (DEFINE-FIELD ,name ,getter-name ,setter-name)
+       (DEFINE-FIELD ,name ,getter-name)
        (EXPORT ',getter-name))))
 
 (defmacro define-standard-fields (&rest names)
-  `(progn
+  "Bulk define fields."
+  `(PROGN
      ,@(mapcar (lambda (name)
-                 `(define-standard-field ,name))
+                 `(DEFINE-STANDARD-FIELD ,name))
                names)))
+
+(defun object-ref-function (keyword)
+  "Returns a function that retrieves the value associated with KEYWORD
+   in an alist or hash table. If the key is not found, it returns NIL."
+  (symbol-function (intern (format nil "GET-~A" (string-upcase (symbol-name keyword))) (find-package "GEMINI"))))
 
 (defun function-minimum-arity (func)
   (collect-length
