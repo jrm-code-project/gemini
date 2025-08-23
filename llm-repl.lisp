@@ -94,7 +94,7 @@
 (defun repl-send-to-gemini (free-form)
   "Sends a FREE-FORM string to the Gemini API for continuation."
   (let ((response (let ((*system-instruction* (repl-system-instruction)))
-                    (gemini-continue free-form))))
+                    (continue-gemini free-form))))
     (if (stringp response)
         (format *standard-output* "~&~A~%" response)
         (format *standard-output* "~&Error: ~A~%" response))

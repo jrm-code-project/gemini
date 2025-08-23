@@ -162,9 +162,8 @@
         (value (default-process-arg-value
                 (cdr arg)
                 (funcall (object-ref-function (car arg)) schema))))
-    (format t "~&;;      Processing arg: ~a = ~s~%" name value)
+    ;; (format t "~&;;      Processing arg: ~a = ~s~%" name value)
     (list name value)))
-
           
 (defun default-process-args (args schema)
   "Processes a list of arguments based on the provided schema.
@@ -180,20 +179,22 @@
                       (get-properties
                        (get-parameters
                         (car entry)))))
-         (handler (and entry (cdr entry))))
-    (format *trace-output* "~&;; Processing function call: ~s~%" (dehashify function-call-part))
+         (handler (and entry (cdr entry)))
+         (arglist (default-process-args args schema)))
+    ;; (format *trace-output* "~&;; Processing function call: ~s~%" (dehashify function-call-part))
+    (format *trace-output* "~&;; Invoking function: ~a(~{~a~^, ~})~%" name arglist)
     (let ((response
             (object :function-response
                     (function-response
                      :name name
                      :response (cond ((null entry)
-                                      (object :error (format nil "No entry for ~s." name)))
+                                      (object :error (format nil "Function `~s` does not exist." name)))
                                      ((null handler)
-                                      (object :error (format nil "No handler for ~s." name)))
+                                      (object :error (format nil "Function `~s` has no handler." name)))
                                      ((not (functionp handler))
-                                      (object :error (format nil "Handler for ~s is not a function." name)))
-                                     (t (object :result (apply handler (default-process-args args schema)))))))))
-      (format *trace-output* "~&;; Function call response: ~s~%" (dehashify response))
+                                      (object :error (format nil "Handler for `~s` is not a function." name)))
+                                     (t (object :result (apply handler arglist))))))))
+      ;; (format *trace-output* "~&;; Function call response: ~s~%" (dehashify response))
       response)))
 
 (defun process-usage-metadata (usage-metadata)
@@ -205,7 +206,7 @@
                             ;; Total Tokens:     ~7,' d~%"
           (get-prompt-token-count usage-metadata)
           (or (get-thoughts-token-count usage-metadata) 0)
-          (get-candidates-token-count usage-metadata)
+          (or (get-candidates-token-count usage-metadata) 0)
           (get-total-token-count usage-metadata)))
 
 (defun ->prompt (thing)
@@ -271,46 +272,36 @@
           (setf (get-usage-metadata stripped) (get-usage-metadata results)))
         stripped))))
 
-(defun json-alist-entry? (s)
-  (and (consp s)
-       (or (symbolp (car s))
-           (stringp (car s)))))
-
-(defun is-json-alist? (s)
-  (every #'json-alist-entry? s))
-
-(defun encode-json-list-try-alist (s stream)
-  (if (is-json-alist? s)
-      (cl-json::encode-json-alist s stream)
-      (cl-json::encode-json-list-guessing-encoder s stream)))
-
-(eval-when (:load-toplevel :execute)
-  (setq cl-json::*json-list-encoder-fn* 'encode-json-list-try-alist))
-
 (defun extract-function-calls-from-candidate (candidate)
   (let ((content (get-content candidate)))
     (when content
-      (remove-if-not #'function-call-part? (get-parts content)))))
+      (remove-if-not #'function-call-part? (coerce (get-parts content) 'list)))))
 
 (defun extract-function-calls-from-results (results)
   "Extracts function calls from the results.
    Returns a list of function call parts if present, otherwise NIL."
   (let ((candidates (get-candidates results)))
-    (when (and (consp candidates)
-               (null (cdr candidates)))
-      (extract-function-calls-from-candidate (car candidates)))))
+    (cond ((and (consp candidates)
+                (null (cdr candidates)))
+           (extract-function-calls-from-candidate (car candidates)))
+          ((and (vectorp candidates)
+                (= (length candidates) 1))
+           (extract-function-calls-from-candidate (svref candidates 0))))))
 
 (defun candidate-as-text-string (candidate)
   (let ((content (get-content candidate)))
     (and content
-         (let ((parts (get-parts content)))
+         (let ((parts (coerce (get-parts content) 'list)))
            (apply #'concatenate 'string (map 'list #'get-text (remove-if-not #'text-part? parts)))))))
 
 (defun as-singleton-text-string (results)
   (let ((candidates (get-candidates results)))
-    (when (and (consp candidates)
-               (null (cdr candidates)))
-      (candidate-as-text-string (car candidates)))))
+    (cond ((and (consp candidates)
+                (null (cdr candidates)))
+           (candidate-as-text-string (car candidates)))
+          ((and (vectorp candidates)
+                (= (length candidates) 1))
+           (candidate-as-text-string (svref candidates 0))))))
 
 (defun tail-call-functions (results)
   (let ((function-calls (extract-function-calls-from-results results)))
@@ -359,7 +350,7 @@
         (setf (get-tool-config payload) tool-config))
       (funcall *output-processor* (%invoke-gemini *model* payload)))))
 
-(defun gemini-continue (content)
+(defun continue-gemini (content)
   "Continues the conversation with the Gemini model using the provided CONTENT.
    CONTENT can be a content object, a part object, a string, a list of content objects,
    a list of part objects, or a list of strings.

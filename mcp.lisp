@@ -34,7 +34,7 @@
    (jsonrpc-client    :accessor jsonrpc-client)
    (mutex :initform (bordeaux-threads:make-lock) :reader mutex)
    (name  :initarg :name :reader get-name)
-   (notification-filter :initform (constantly nil) :accessor notification-filter)
+   (notification-filter :initform (constantly t) :accessor notification-filter)
    (notification-stream :initform *trace-output* :accessor notification-stream)
    (resource-subscriptions :initform (make-hash-table :test #'equal) :reader resource-subscriptions)
    ))
@@ -167,10 +167,13 @@
                        ((equal (get-method message) "notifications/resources/updated")
                         (handle-notification-resources-updated client message))
 
+                       ((equal (get-method message) "roots/list")
+                        (handle-roots-list client message))
+
                        ((equal (get-method message) "sampling/createMessage")
                         (handle-sampling-create-message client message))
 
-                       (t (format *trace-output* "~&Unexpected MCP message: ~s~%" message)
+                       (t (format *trace-output* "~&Unexpected MCP message: ~s~%" (dehashify message))
                           (finish-output *trace-output*))))))))
 
     (setf (jsonrpc-client client) jsonrpc-clnt)
@@ -188,7 +191,10 @@
                   :protocol-version "2024-11-05"))
 
          (server-initialization-info
-          (jsonrpc (jsonrpc-client mcp-client) "initialize" client-initialization-info))
+           (prog1 (jsonrpc (jsonrpc-client mcp-client) "initialize" client-initialization-info)
+             (chanl:send (outgoing-channel (jsonrpc-client mcp-client))
+                         (object :jsonrpc "2.0"
+                                 :method "notifications/initialized"))))
 
          (capabilities (get-capabilities server-initialization-info))
          (capabilities-keys (keys capabilities))
@@ -285,6 +291,15 @@
     (when handler
       (funcall handler uri))))
 
+(defun handle-roots-list (client message)
+  (chanl:send
+   (outgoing-channel (jsonrpc-client client))
+   (object :jsonrpc "2.0"
+           :id (get-id message)
+           :result (object :roots
+                           (vector (object :uri "file:///home/jrm/gemini"
+                                           :name "Gemini"))))))
+
 (defun handle-sampling-create-message (client message)
   (let* ((params (get-params message))
          (include-context (->keyword (get-include-context params)))
@@ -313,7 +328,7 @@
                    (if include-context
                        (setf *prior-history* (context client))
                        (setf *prior-history* nil))
-                   (let ((result (gemini-continue prompt)))
+                   (let ((result (continue-gemini prompt)))
                      (if include-context
                          (setf (context client) (append result *prior-history*))
                          (setf (context client) result))

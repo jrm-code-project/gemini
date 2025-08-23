@@ -29,16 +29,17 @@ Please provide debugging assistance, attempt to diagnose the error, and suggest 
 (defun call-with-llm-debugger-hook (thunk)
   "Creates a hook that can be used as a debugger hook for LLM-based debugging."
   (let* ((old-debugger-hook *debugger-hook*)
-        (*debugger-hook* (lambda (condition &optional prior-debugger-hook)
-                             (let ((error-message (format nil "~a" condition))
-                                   (backtrace (with-output-to-string (s)
-                                                (trivial-backtrace:print-backtrace condition :output s :verbose t))))
-                               (let ((response (invoke-llm-debugger
-                                                :error-message error-message
-                                                :backtrace backtrace)))
-                                 (format t "~&LLM Debugger Response: ~a~%" response)
-                                 (when old-debugger-hook
-                                   (funcall old-debugger-hook condition prior-debugger-hook)))))))
+         (*debugger-hook*
+           (lambda (condition &optional prior-debugger-hook)
+             (let ((error-message (format nil "~a" condition))
+                   (backtrace (with-output-to-string (s)
+                                (trivial-backtrace:print-backtrace condition :output s :verbose t))))
+               (let ((response (invoke-llm-debugger
+                                :error-message error-message
+                                :backtrace backtrace)))
+                 (format t "~&LLM Debugger Response: ~a~%" response)
+                 (when old-debugger-hook
+                   (funcall old-debugger-hook condition prior-debugger-hook)))))))
     (funcall thunk)))
 
 (defmacro with-llm-debugger (&body body)

@@ -14,8 +14,8 @@
     (format stream "~a" (slot-value object 'value))))
 
 (defparameter +json-false+ (make-instance 'json-boolean :value "false"))
-(defparameter +json-true+ (make-instance 'json-boolean :value "true"))
-(defparameter +json-null+ (make-instance 'json-boolean :value "null"))
+(defparameter +json-null+  (make-instance 'json-boolean :value "null"))
+(defparameter +json-true+  (make-instance 'json-boolean :value "true"))
 (defparameter +json-empty-list+ #())
 (defparameter +json-empty-object+ (make-hash-table))
 
@@ -53,8 +53,8 @@ package *JSON-SYMBOLS-PACKAGE*."
 (defmacro with-decoder-jrm-semantics (&body body)
   "Execute BODY in a dynamic environment where the decoder semantics
 is such as set by SET-DECODER-JRM-SEMANTICS."
-  `(cl-json:with-shadowed-custom-vars
-     (set-decoder-jrm-semantics)
+  `(CL-JSON:WITH-SHADOWED-CUSTOM-VARS
+     (SET-DECODER-JRM-SEMANTICS)
      ,@body))
 
 (eval-when (:load-toplevel :execute)
@@ -67,4 +67,18 @@ is such as set by SET-DECODER-JRM-SEMANTICS."
                    json-string2))
       ())))
 
+(defun json-alist-entry? (s)
+  (and (consp s)
+       (or (symbolp (car s))
+           (stringp (car s)))))
 
+(defun is-json-alist? (s)
+  (every #'json-alist-entry? s))
+
+(defun encode-json-list-try-alist (s stream)
+  (if (is-json-alist? s)
+      (cl-json::encode-json-alist s stream)
+      (cl-json::encode-json-list-guessing-encoder s stream)))
+
+(eval-when (:load-toplevel :execute)
+  (setq cl-json::*json-list-encoder-fn* 'encode-json-list-try-alist))
