@@ -61,10 +61,10 @@
 
 (defun create-jsonrpc-client (name command args unsolicited-message-handler)
   (let ((process-info
-         (uiop:launch-program (append command args)
-                              :error-output :stream
-                              :input        :stream
-                              :output       :stream)))
+          (uiop:launch-program (append command args)
+                               :error-output :stream
+                               :input        :stream
+                               :output       :stream)))
     (letrec ((client (make-instance 'jsonrpc-client :process-info process-info)))
 
       ;; Start a thread to send RPCs to the server.
@@ -95,11 +95,11 @@
          (do ((line (read-line (uiop:process-info-output process-info) nil nil)
                     (read-line (uiop:process-info-output process-info) nil nil)))
              ((null line))
-           (let ((message (cl-json:decode-json-from-string line)))
+           (let ((message (with-decoder-jrm-semantics (cl-json:decode-json-from-string line))))
              (cond ((equal (get-jsonrpc message) "2.0")
                     (cond ((equal (get-method message) "notifications/cancelled")
                            (let* ((params (get-params message))
-                                  (reason (get-reason params))
+                                  ;; (reason (get-reason params))
                                   (request-id (get-request-id params))
                                   (thread (with-jsonrpc-client-lock (client)
                                             (gethash request-id (request-threads client)))))

@@ -20,9 +20,11 @@
                                        ("x-goog-api-key" . ,(google-api-key)))
                             :content (cl-json:encode-json-to-string payload))))
     (if (stringp response)
-        (cl-json:decode-json-from-string response)
-        (cl-json:decode-json-from-string
-          (flex:octets-to-string response :external-format :utf-8)))))
+        (with-decoder-jrm-semantics
+          (cl-json:decode-json-from-string response))
+        (with-decoder-jrm-semantics
+          (cl-json:decode-json-from-string
+           (flex:octets-to-string response :external-format :utf-8))))))
 
 (defun get-handler (name function-and-handler-list)
   (cdr (assoc name function-and-handler-list :test #'equal :key #'get-name)))
@@ -138,27 +140,36 @@
 (defun process-thoughts (thoughts)
   "Processes a list of thought part objects.
    Each thought is processed by the `process-thought` function."
-  (mapc #'process-thought thoughts))
+  (map nil #'process-thought thoughts))
 
 (defun default-process-arg-value (arg schema)
   "Processes a single argument value based on the provided schema.
    Returns the processed value according to the type specified in the schema."
   (ecase (get-type-enum schema)
+    (:array (let ((item-schema (get-items schema)))
+              (map 'vector (lambda (item)
+                           (default-process-arg-value item item-schema))
+                   arg)))
+    (:boolean arg)
     (:integer (if (integerp arg) arg (error "Expected integer, got ~s" arg)))
+    (:object  arg)
     (:string arg)))
 
 (defun default-process-arg (arg schema)
   "Processes a single argument based on the provided schema.
    Returns a list containing the argument name and its processed value."
-  (list (car arg)
-        (default-process-arg-value
-         (cdr arg)
-         (funcall (object-ref-function (car arg)) schema))))
+  (let ((name (car arg))
+        (value (default-process-arg-value
+                (cdr arg)
+                (funcall (object-ref-function (car arg)) schema))))
+    (format t "~&;;      Processing arg: ~a = ~s~%" name value)
+    (list name value)))
+
           
 (defun default-process-args (args schema)
   "Processes a list of arguments based on the provided schema.
    Returns a list of processed arguments."
-  (mappend (lambda (arg) (default-process-arg arg schema)) args))
+  (mappend (lambda (arg) (default-process-arg arg schema)) (hash-table-alist args)))
 
 (defun default-process-function-call (function-call-part)
   (let* ((name (get-name function-call-part))
@@ -170,17 +181,20 @@
                        (get-parameters
                         (car entry)))))
          (handler (and entry (cdr entry))))
-    (format *trace-output* "~&;; Processing function call: ~a~%" name)
-    (object :function-response
-            (function-response
-             :name name
-             :response (cond ((null entry)
-                              (object :error (format nil "No entry for ~s." name)))
-                             ((null handler)
-                              (object :error (format nil "No handler for ~s." name)))
-                             ((not (functionp handler))
-                              (object :error (format nil "Handler for ~s is not a function." name)))
-                             (t (object :result (apply handler (default-process-args args schema)))))))))
+    (format *trace-output* "~&;; Processing function call: ~s~%" (dehashify function-call-part))
+    (let ((response
+            (object :function-response
+                    (function-response
+                     :name name
+                     :response (cond ((null entry)
+                                      (object :error (format nil "No entry for ~s." name)))
+                                     ((null handler)
+                                      (object :error (format nil "No handler for ~s." name)))
+                                     ((not (functionp handler))
+                                      (object :error (format nil "Handler for ~s is not a function." name)))
+                                     (t (object :result (apply handler (default-process-args args schema)))))))))
+      (format *trace-output* "~&;; Function call response: ~s~%" (dehashify response))
+      response)))
 
 (defun process-usage-metadata (usage-metadata)
   "Processes usage metadata from the API response.
@@ -257,6 +271,22 @@
           (setf (get-usage-metadata stripped) (get-usage-metadata results)))
         stripped))))
 
+(defun json-alist-entry? (s)
+  (and (consp s)
+       (or (symbolp (car s))
+           (stringp (car s)))))
+
+(defun is-json-alist? (s)
+  (every #'json-alist-entry? s))
+
+(defun encode-json-list-try-alist (s stream)
+  (if (is-json-alist? s)
+      (cl-json::encode-json-alist s stream)
+      (cl-json::encode-json-list-guessing-encoder s stream)))
+
+(eval-when (:load-toplevel :execute)
+  (setq cl-json::*json-list-encoder-fn* 'encode-json-list-try-alist))
+
 (defun extract-function-calls-from-candidate (candidate)
   (let ((content (get-content candidate)))
     (when content
@@ -282,14 +312,13 @@
                (null (cdr candidates)))
       (candidate-as-text-string (car candidates)))))
 
-(defparameter *return-text-string* t
-  "If non-NIL, return the text string of the candidate instead of the candidate object.")
-
 (defun tail-call-functions (results)
   (let ((function-calls (extract-function-calls-from-results results)))
     (if function-calls
         (let ((function-results (map 'list (compose #'default-process-function-call #'get-function-call)
                                      function-calls)))
+          (assert (list-of-parts? function-calls) () "Expected function-calls to be a list of parts.")
+          (assert (list-of-parts? function-results) () "Expected function-results to be a list of parts.")
           (invoke-gemini
             (list (content :parts function-calls
                            :role "model")

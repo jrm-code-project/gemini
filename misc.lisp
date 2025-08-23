@@ -47,6 +47,9 @@
                     (eq dehashed-cdr (cdr object)))
                object
                (cons dehashed-car dehashed-cdr))))
+        ((stringp object) object)
+        ((vectorp object)
+         (map 'vector #'dehashify object))
         (t object)))
 
 (defun key? (thing)
@@ -94,7 +97,7 @@
   (let ((object (make-hash-table :test 'equal)))
     (let iter ((fields fields))
       (when fields
-        (let ((field-name (->keystring (first fields)))
+        (let ((field-name (->keyword (first fields)))
               (field-value (second fields)))
           (setf (gethash field-name object) field-value))
         (iter (cddr fields))))
@@ -164,9 +167,12 @@
   "Returns a predicate that checks if THING is a list containing exactly
    one element, and that element satisfies the provided PREDICATE."
   (lambda (thing)
-    (and (consp thing)
-         (null (cdr thing))
-         (funcall predicate (car thing)))))
+    (or (and (consp thing)
+             (null (cdr thing))
+             (funcall predicate (car thing)))
+        (and (vectorp thing)
+             (= (length thing) 1)
+             (funcall predicate (svref thing 0))))))
 
 (defmacro define-field (name getter)
   "Define a GET-<name> and (SETF GET-<name>) generic function."
@@ -206,7 +212,13 @@
 (defun object-ref-function (keyword)
   "Returns a function that retrieves the value associated with KEYWORD
    in an alist or hash table. If the key is not found, it returns NIL."
-  (symbol-function (intern (format nil "GET-~A" (string-upcase (symbol-name keyword))) (find-package "GEMINI"))))
+  (let ((symbol (find-symbol (format nil "GET-~A" (string-upcase (symbol-name keyword))) (find-package "GEMINI"))))
+    (if (and symbol (fboundp symbol))
+        symbol
+        (lambda (object)
+          (if (hash-table-p object)
+              (gethash keyword object)
+              (cdr (assoc keyword object :key #'->keyword)))))))
 
 (defun function-minimum-arity (func)
   (collect-length
@@ -233,22 +245,6 @@
 
 (defun returns-boolean? (func)
   (eq (function-return-type func) 'boolean))
-
-(defclass json-boolean ()
-  ((value :initarg :value)))
-
-(defmethod json:encode-json ((object json-boolean) &optional stream)
-  (princ (slot-value object 'value) stream)
-  nil)
-
-(defmethod print-object ((object json-boolean) stream)
-  (print-unreadable-object (object stream :type t)
-    (format stream "~a" (slot-value object 'value))))
-
-(defparameter +json-false+ (make-instance 'json-boolean :value "false"))
-(defparameter +json-true+ (make-instance 'json-boolean :value "true"))
-(defparameter +json-empty-list+ (make-instance 'json-boolean :value "[]"))
-(defparameter +json-empty-object+ (make-instance 'json-boolean :value "{}"))
 
 (defun prompting-read (prompt &optional (default nil))
   "Prompts the user for input, returning the input as a string.
@@ -385,6 +381,8 @@
                                    query)
                            :headers `(("x-goog-api-key". ,(custom-search-engine-api-key))))))
     (if (stringp response)
-        (cl-json:decode-json-from-string response)
-        (cl-json:decode-json-from-string
-         (flex:octets-to-string response :external-format :utf-8)))))
+        (with-decoder-jrm-semantics
+          (cl-json:decode-json-from-string response))
+        (with-decoder-jrm-semantics
+          (cl-json:decode-json-from-string
+           (flex:octets-to-string response :external-format :utf-8))))))

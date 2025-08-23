@@ -26,6 +26,7 @@
    (version          :accessor get-version)
 
    (config :initarg :config :reader config)
+   (context :initarg nil :accessor context)
    (delayed-prompts   :initarg :delayed-prompts   :reader delayed-prompts)
    (delayed-resources :initarg :delayed-resources :reader delayed-resources)
    (delayed-resource-templates :initarg :delayed-resource-templates :reader delayed-resource-templates)
@@ -142,30 +143,35 @@
              :name name))
 
            (jsonrpc-clnt
-            (create-jsonrpc-client
-             name
-             (get-command config)
-             (get-args config)
-             (lambda (message)
-               (cond ((equal (get-method message) "elicitation/create")
-                      (handle-elicitation client message))
+            (progn
+              (map nil (lambda (entry)
+                         (setf (uiop:getenv (car entry)) (cdr entry)))
+                   (get-env config))
 
-                     ((and (equal (get-method message) "notifications/message")
-                           (notification-stream client))
-                      (handle-notification-message client message))
+              (create-jsonrpc-client
+               name
+               (get-command config)
+               (get-args config)
+               (lambda (message)
+                 (cond ((equal (get-method message) "elicitation/create")
+                        (handle-elicitation client message))
 
-                     ((and (equal (get-method message) "notifications/progress")
-                           (notification-stream client))
-                      (handle-notification-progress client message))
+                       ((and (equal (get-method message) "notifications/message")
+                             (notification-stream client))
+                        (handle-notification-message client message))
 
-                     ((equal (get-method message) "notifications/resources/updated")
-                      (handle-notification-resources-updated client message))
+                       ((and (equal (get-method message) "notifications/progress")
+                             (notification-stream client))
+                        (handle-notification-progress client message))
 
-                     ((equal (get-method message) "sampling/createMessage")
-                      (handle-sampling-create-message client message))
+                       ((equal (get-method message) "notifications/resources/updated")
+                        (handle-notification-resources-updated client message))
 
-                     (t (format *trace-output* "~&Unexpected MCP message: ~s~%" message)
-                        (finish-output *trace-output*)))))))
+                       ((equal (get-method message) "sampling/createMessage")
+                        (handle-sampling-create-message client message))
+
+                       (t (format *trace-output* "~&Unexpected MCP message: ~s~%" message)
+                          (finish-output *trace-output*))))))))
 
     (setf (jsonrpc-client client) jsonrpc-clnt)
     (initialize-mcp-client! client)
@@ -174,7 +180,7 @@
 (defun initialize-mcp-client! (mcp-client)
   (let* ((client-initialization-info
           (object :capabilities (object :elicitation +json-empty-object+
-                                        :roots (object :list-changed t)
+                                        :roots (object :list-changed +json-true+)
                                         :sampling +json-empty-object+)
                   :client-info (object :display-name "SBCL Gemini Client"
                                        :name "SBCLGeminiClient"
@@ -210,7 +216,7 @@
     (when (has-resources-capability? mcp-client)
       (setf (has-resources-subscribe-capability? mcp-client) (get-subscribe (get-resources capabilities))))
          
-    (format t "~&MCP Client ~a initialized.~%" server-name initialization-result)))
+    (format t "~&MCP Client ~a initialized.~%" server-name)))
 
 (defun handle-elicitation (client message)
   (format t "~&~s~%" message)
@@ -218,7 +224,8 @@
   (let* ((params (get-params message))
          (msg (get-message params))
          (requested-schema (get-requested-schema params))
-         (type (get-type requested-schema)))
+         ;;(type (get-type requested-schema))
+         )
     (format *query-io* "~%MCP Server ~a elicits a response: ~a~%" (get-autonym client) msg)
     (finish-output *query-io*)
     (let ((response
@@ -259,7 +266,7 @@
          (data   (get-data   params)))
     (when (funcall (notification-filter client) level)
       (format (notification-stream client)
-              "~&~a MCP ~:(~a~) Notification: ~a~%" name level data)
+              "~&~a MCP ~:(~a~) Notification: ~a~%" (get-autonym client) level data)
       (finish-output (notification-stream client)))))
 
 (defun handle-notification-progress (client message)
@@ -271,7 +278,7 @@
             "~&~s (~d/~d)~%" token progress total)
     (finish-output (notification-stream client))))
 
-(defun handle-notification-resource-updated (client message)
+(defun handle-notification-resources-updated (client message)
   (let* ((params (get-params message))
          (uri    (get-uri    params))
          (handler (gethash uri (resource-subscriptions client))))
@@ -292,17 +299,25 @@
                          :parts (list (part system-prompt))))
                        (*max-output-tokens* max-tokens)
                        (*return-text-string* nil)
-                       (*temperature* temperature))
-                   (invoke-gemini
-                    (remove nil (map 'list (lambda (message)
-                                               (let* ((role (get-role message))
-                                                      (content (get-content message))
-                                                      (type (get-type content)))
-                                                 (if (equal type "text")
-                                                     (content
-                                                      :role role
-                                                      :parts (list (part (get-text content)))))))
-                                       messages))))))
+                       (*history* (context client))
+                       (*temperature* temperature)
+                       (prompt (remove nil (map 'list (lambda (message)
+                                                        (let* ((role (get-role message))
+                                                               (content (get-content message))
+                                                               (type (get-type content)))
+                                                          (if (equal type "text")
+                                                              (content
+                                                               :role role
+                                                               :parts (list (part (get-text content)))))))
+                                                messages))))
+                   (if include-context
+                       (setf *prior-history* (context client))
+                       (setf *prior-history* nil))
+                   (let ((result (gemini-continue prompt)))
+                     (if include-context
+                         (setf (context client) (append result *prior-history*))
+                         (setf (context client) result))
+                     result))))
     (format t "~&sample: ~s~%" (dehashify sample))
     (chanl:send (outgoing-channel (jsonrpc-client client))
                 (object :jsonrpc "2.0"

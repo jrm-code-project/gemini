@@ -668,41 +668,23 @@
   (when (has-tools-capability? client)
     (map 'list (lambda (tool) (convert-tool client tool)) (get-tools client))))
 
+(defun check-input-against-schema (args input-schema)
+  (format t "~&;; Checking input ~s against schema: ~a~%" (dehashify args) (dehashify input-schema))
+  t)
+
 (defun convert-tool (mcp-client tool)
   "Converts an MCP tool to a function specification."
   (let ((input-schema  (get-input-schema tool))
         (output-schema (get-output-schema tool)))
 
     (cons (function-declaration
-           :name (format nil "~a.~a" (get-name mcp-client) (get-name tool))
+           :name (format nil "~a" (get-name tool))
            :description (get-description tool)
            :behavior :blocking
-           :parameters (convert-input-schema input-schema)
-           :response (convert-output-schema output-schema))
+           :parameters (encode-schema-type input-schema)
+           :response (encode-schema-type output-schema))
           (lambda (&rest args &key &allow-other-keys)
+            ;(check-input-against-schema args input-schema)
             (call-tool mcp-client tool (apply #'object args))))))
-
-(defun convert-input-schema (input-schema)
-  (when input-schema
-    (schema :type :object
-            :properties (convert-properties (get-properties input-schema))
-            :required (get-required input-schema))))
-
-(defun convert-properties (properties)
-  (let ((props (object)))
-    (dolist (property properties)
-      (setf (gethash (car property) props)
-            (convert-property (cdr property))))
-    props))
-
-(defun convert-property (property)
-  (schema :type (->keyword (get-type property))
-          :description (get-description property)))
-
-(defun convert-output-schema (output-schema)
-  (when output-schema
-    (schema :type :object
-            :properties (convert-properties (get-properties output-schema))
-            :required (get-required output-schema))))
 
 

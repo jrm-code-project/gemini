@@ -406,3 +406,7 @@
 (defparameter *prior-model* nil
   "Holds the prior model name or identifier for the API.
    This is used to maintain context across multiple API calls, especially for multi-turn conversations.")
+
+(defparameter *return-text-string* t
+  "If non-NIL, return the text string of the candidate instead of the candidate object.")
+

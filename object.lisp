@@ -21,7 +21,9 @@
   :data
   :description
   :enable-advanced-civic-answers
+  :entities
   :enum
+  :env
   :executable-code
   :file-data
   :finish-reason
@@ -63,6 +65,7 @@
   :parameters-json-schema
   :params
   :parts
+  :path
   :presence-penalty
   :progress
   :progress-token
@@ -70,7 +73,10 @@
   :prompts
   :properties
   :protocol-version
+  :query
   :reason
+  :relation
+  :relations
   :request-id
   :requested-schema
   :required
@@ -90,11 +96,13 @@
   :seed
   :server-info
   :snippet
+  :source
   :speech-config
   :stop-sequences
   :subscribe
   :system-instruction
   :system-prompt
+  :target
   :temperature
   :text
   :thinking-config
@@ -138,6 +146,102 @@
     (:boolean 4)
     (:array 5)
     (:object 6)))
+
+(defun encode-schema-type (thing)
+  (cond ((consp thing)
+         (let ((car (car thing))
+               (cdr (cdr thing)))
+           (cond ((and (consp car)
+                       (or (eq (car car) :$schema)
+                           (equal (car car) "$schema")
+                           (eq (car car) :additional-properties)
+                           (equal (car car) "additional-properties")))
+                  (encode-schema-type cdr))
+                 ((or (eq car :type)
+                      (equal car "type"))
+                  (cond ((or (eq cdr :unspecified) (equal cdr "unspecified")) (cons car 0))
+                        ((or (eq cdr :string) (equal cdr "string")) (cons car 1))
+                        ((or (eq cdr :number) (equal cdr "number")) (cons car 2))
+                        ((or (eq cdr :integer) (equal cdr "integer")) (cons car 3))
+                        ((or (eq cdr :boolean) (equal cdr "boolean")) (cons car 4))
+                        ((or (eq cdr :array) (equal cdr "array")) (cons car 5))
+                        ((or (eq cdr :object) (equal cdr "object")) (cons car 6))
+                        (t (let ((newcdr (encode-schema-type cdr)))
+                             (if (eq cdr newcdr)
+                                 thing
+                                 (cons car newcdr))))))
+                 (t
+                  (let ((newcar (encode-schema-type car))
+                        (newcdr (encode-schema-type cdr)))
+                    (if (and (eq car newcar) (eq cdr newcdr))
+                        thing
+                        (cons newcar newcdr)))))))
+        ((or (null thing)
+             (symbolp thing)
+             (stringp thing)
+             (numberp thing)
+             (typep thing 'json-boolean))
+         thing)
+        ((hash-table-p thing)
+         (let* ((alist (hash-table-alist thing))
+                (new-alist (mapcar #'encode-schema-type
+                                   (remove :$schema
+                                           (remove "$schema"
+                                                   (remove :additional-properties
+                                                           (remove "additional-properties"
+                                                                   alist
+                                                                   :key #'car :test #'equal)
+                                                              :key #'car :test #'eql)
+                                                   :key #'car :test #'equal)
+                                           :key #'car :test #'eql))))
+           (if (every #'eq alist new-alist)
+               thing
+               (alist-hash-table new-alist))))
+        ((vectorp thing)
+         (let ((new (map 'vector #'encode-schema-type thing)))
+           (if (every #'eql thing new)
+               thing
+               new)))
+        (t 
+         (error "Cannot encode schema type for ~s" thing))))
+
+(defun decode-schema-type (thing)
+  (cond ((consp thing)
+         (let ((car (car thing))
+               (cdr (cdr thing)))
+           (cond ((or (eq car :type)
+                      (equal car "type"))
+                  (cond ((eql cdr 0) (cons car :unspecified))
+                        ((eql cdr 1) (cons car :string))
+                        ((eql cdr 2) (cons car :number))
+                        ((eql cdr 3) (cons car :integer))
+                        ((eql cdr 4) (cons car :boolean))
+                        ((eql cdr 5) (cons car :array))
+                        ((eql cdr 6) (cons car :object))
+                        (t (let ((newcdr (decode-schema-type cdr)))
+                             (if (eq cdr newcdr)
+                                 thing
+                                 (cons car newcdr))))))
+                 (t
+                  (let ((newcar (decode-schema-type car))
+                        (newcdr (decode-schema-type cdr)))
+                    (if (and (eq car newcar) (eq cdr newcdr))
+                        thing
+                        (cons newcar newcdr)))))))
+        ((or (null thing)
+             (symbolp thing)
+             (stringp thing))
+         thing)
+        ((hash-table-p thing)
+         (let* ((alist (hash-table-alist thing))
+                (new-alist (mapcar #'decode-schema-type alist)))
+           (if (every #'eq alist new-alist)
+               thing
+               (alist-hash-table new-alist))))
+        ((vectorp thing)
+         (map 'vector #'decode-schema-type thing))
+        (t 
+         (error "Cannot decode schema type for ~s" thing))))
 
 (defun get-type-enum (schema)
   "Retrieves the type of a schema object."
@@ -264,7 +368,7 @@
   (assert (or (null role) (stringp role))
           () "Role must be a string or NIL.")
   (assert (list-of-parts? parts)
-          () "Parts must be a list or NIL.")
+          () "Parts must be a list of parts or NIL.")
   (let ((content (object :parts parts)))
     (when role
       (setf (get-role content) role))
@@ -273,6 +377,8 @@
 (defun function-call (&key name args)
   "Creates a function call object with the specified NAME and ARGS.
    Returns a hash table representing the function call structure."
+  (assert (or (hash-table-p args) (alist? args))
+          () "Args must be a hash table or alist.")
   (object :name name :args args))
 
 (defun function-declaration (&key name description behavior
