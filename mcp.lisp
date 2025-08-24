@@ -16,7 +16,7 @@
    (capability/prompts     :initarg nil :accessor has-prompts-capability?)
    (capability/resources   :initarg nil :accessor has-resources-capability?)
    (capability/resources/subscribe
-                           :initarg nil :accessor has-resources-subscribe-capability?)
+    :initarg nil :accessor has-resources-subscribe-capability?)
    (capability/tools       :initarg nil :accessor has-tools-capability?)
 
    (autonym          :accessor get-autonym)
@@ -92,10 +92,10 @@
                     (between (->keyword (subseq resource-template (1+ open-curly) close-curly)))
                     (after   (subseq resource-template (1+ close-curly) (length resource-template))))
                 (format nil "~a~a~a"
-                             before
-                             (or (getf substitution-plist between)
-                                 (error "No substitution for {~a}" between))
-                             after)))))))
+                        before
+                        (or (getf substitution-plist between)
+                            (error "No substitution for {~a}" between))
+                        after)))))))
 
 (defun read-resource-by-template (mcp-client template-name &rest substitution-plist)
   "Read a resource by its template name, substituting args into the template."
@@ -182,13 +182,13 @@
 
 (defun initialize-mcp-client! (mcp-client)
   (let* ((client-initialization-info
-          (object :capabilities (object :elicitation +json-empty-object+
-                                        :roots (object :list-changed +json-true+)
-                                        :sampling +json-empty-object+)
-                  :client-info (object :display-name "SBCL Gemini Client"
-                                       :name "SBCLGeminiClient"
-                                       :version "1.0.0")
-                  :protocol-version "2024-11-05"))
+           (object :capabilities (object :elicitation (object)
+                                         :roots (object :list-changed +json-true+)
+                                         :sampling (object))
+                   :client-info (object :display-name "SBCL Gemini Client"
+                                        :name "SBCLGeminiClient"
+                                        :version "1.0.0")
+                   :protocol-version "2024-11-05"))
 
          (server-initialization-info
            (prog1 (jsonrpc (jsonrpc-client mcp-client) "initialize" client-initialization-info)
@@ -235,36 +235,35 @@
     (format *query-io* "~%MCP Server ~a elicits a response: ~a~%" (get-autonym client) msg)
     (finish-output *query-io*)
     (let ((response
-           (let iter ((thing (cons :requested-schema requested-schema)))
-                (let ((name (car thing))
-                      (components (cdr thing)))
-                  (cons name
-                        (cond ((equal (get-type components) "integer")
-                               (let ((description (get-description components))
-                                     (maximum (get-maximum components))
-                                     (minimum (get-minimum components)))
-                                 (format *query-io* "~&~a (~d-~d): " description minimum maximum)
-                                 (finish-output *query-io*)
-                                 (parse-integer (read-line *query-io*))))
-                              ((equal (get-type components) "string")
-                               (let retry ((description (get-description components))
-                                           (enum (get-enum components)))
-                                    (format *query-io* "~&~a~@[ (~{~a~^ ~})~]: " description enum)
-                                    (finish-output *query-io*)
-                                    (let ((string (read-line *query-io*)))
-                                      (if (and enum
-                                               (not (member string enum :test #'equal)))
-                                          (retry description enum)
-                                        string))))
-                              ((equal (get-type components) "object")
-                               (map 'list #'iter (get-properties components)))
-                              (t (error "Unrecognized schema"))))))))
+            (let iter ((thing (cons :requested-schema requested-schema)))
+              (let ((name (car thing))
+                    (components (cdr thing)))
+                (cons name
+                      (cond ((equal (get-type components) "integer")
+                             (let ((description (get-description components))
+                                   (maximum (get-maximum components))
+                                   (minimum (get-minimum components)))
+                               (format *query-io* "~&~a (~d-~d): " description minimum maximum)
+                               (finish-output *query-io*)
+                               (parse-integer (read-line *query-io*))))
+                            ((equal (get-type components) "string")
+                             (let retry ((description (get-description components))
+                                         (enum (get-enum components)))
+                               (format *query-io* "~&~a~@[ (~(object~a~^ ~))~]: " description enum)
+                               (finish-output *query-io*)
+                               (let ((string (read-line *query-io*)))
+                                 (if (and enum
+                                          (not (member string enum :test #'equal)))
+                                     (retry description enum)
+                                     string))))
+                            ((equal (get-type components) "object")
+                             (map 'list #'iter (get-properties components)))
+                            (t (error "Unrecognized schema"))))))))
       (chanl:send (outgoing-channel (jsonrpc-client client))
                   (object :jsonrpc "2.0"
                           :id (get-id message)
-                          :result (object
-                                   :action "accept"
-                                   :content (cdr response)))))))
+                          :result (object :action "accept"
+                                          :content (cdr response)))))))
 
 (defun handle-notification-message (client message)
   (let* ((params (get-params message))
@@ -310,8 +309,8 @@
          (temperature (and (stringp (get-temperature params))
                            (read-from-string (get-temperature params))))
          (sample (let ((*system-instruction*
-                        (content
-                         :parts (list (part system-prompt))))
+                         (content
+                          :parts (list (part system-prompt))))
                        (*max-output-tokens* max-tokens)
                        (*return-text-string* nil)
                        (*history* (context client))
@@ -338,13 +337,14 @@
                 (object :jsonrpc "2.0"
                         :id (get-id message)
                         :result 
-                                    (object
-                                     :role "assistant"
-                                     :content (object
-                                               :type "text"
-                                               :text (get-text (car (get-parts (get-content (car (get-candidates sample)))))))
-                                     :model (get-model-version sample)
-                                     :stop-reason "endTurn")))))
+                        (object
+                         :role "assistant"
+                         :content (object
+                                   :type "text"
+                                   :text (get-text (car (get-parts (get-content (car (get-candidates sample)))))))
+                         :model (get-model-version sample)
+                         :stop-reason "endTurn"
+                         )))))
 
 
 (defun start-mcp-clients ()
@@ -364,16 +364,17 @@
 
 (defun call-tool (mcp-client tool params)
   (jsonrpc (jsonrpc-client mcp-client)
-           "tools/call" (object :_meta (object :progress-token (format nil "~aProgress" (get-name tool)))
+           "tools/call" (object :_meta (object :progress-token (format nil "~aProgress" (get-name tool)) )
                                 :name (get-name tool)
                                 :arguments (or params
-                                               +json-empty-object+))))
+                                               +json-empty-object+)
+                                )))
 
 (defun test-tools ()
   (let ((client (find-mcp-client "Everything")))
     (print (call-tool client (find-tool client "echo") (object :message "Hello, MCP!")))
     (finish-output)
-    (print (call-tool client (find-tool client "add") (object :a 42 :b 69)))
+    (print (call-tool client (find-tool client "add") (object :a 42 :b 69 )))
     (finish-output)
     ;; (print (call-tool client (find-tool client "longRunningOperation") (object :duration 15 :steps 10)))
     ;; (finish-output)

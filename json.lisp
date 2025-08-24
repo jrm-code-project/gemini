@@ -16,8 +16,8 @@
 (defparameter +json-false+ (make-instance 'json-boolean :value "false"))
 (defparameter +json-null+  (make-instance 'json-boolean :value "null"))
 (defparameter +json-true+  (make-instance 'json-boolean :value "true"))
-(defparameter +json-empty-list+ #())
-(defparameter +json-empty-object+ (make-hash-table))
+(defparameter +json-empty-list+ (vector))
+(defparameter +json-empty-object+ (object))
 
 (defun set-decoder-jrm-semantics ()
   "Set the JSON decoder semantics to the following:
@@ -63,8 +63,8 @@ is such as set by SET-DECODER-JRM-SEMANTICS."
            (json-string2
              (cl-json:encode-json-to-string
               (cl-json:decode-json-from-string json-string1))))
-    (assert (equal json-string1
-                   json-string2))
+      (assert (equal json-string1
+                     json-string2))
       ())))
 
 (defun json-alist-entry? (s)

@@ -30,10 +30,10 @@
   "Call THUNK with an incoming channel for the given JSONRPC-CLIENT and ID."
   (with-channel (incoming-channel)
     (unwind-protect
-        (progn
-          (with-jsonrpc-client-lock (jsonrpc-client)
-            (setf (gethash id (incoming-channels jsonrpc-client)) incoming-channel))
-          (funcall thunk incoming-channel))
+         (progn
+           (with-jsonrpc-client-lock (jsonrpc-client)
+             (setf (gethash id (incoming-channels jsonrpc-client)) incoming-channel))
+           (funcall thunk incoming-channel))
       (with-jsonrpc-client-lock (jsonrpc-client)
         (remhash id (incoming-channels jsonrpc-client))))))
 
@@ -45,17 +45,17 @@
   (letrec ((new-thread (bordeaux-threads:make-thread
                         (lambda ()
                           (block nil
-                                 (unwind-protect
-                                     (restart-case
-                                        (progn (with-jsonrpc-client-lock (jsonrpc-client)
-                                                 (setf (gethash id (request-threads jsonrpc-client)) new-thread))
-                                               (funcall thunk))
-                                      (abort ()
-                                        (format *trace-output* "~&Aborting request thread for ID ~a~%" id)
-                                        (finish-output *trace-output*)
-                                        (return nil)))
-                                   (with-jsonrpc-client-lock (jsonrpc-client)
-                                     (remhash id (request-threads jsonrpc-client))))))
+                            (unwind-protect
+                                 (restart-case
+                                     (progn (with-jsonrpc-client-lock (jsonrpc-client)
+                                              (setf (gethash id (request-threads jsonrpc-client)) new-thread))
+                                            (funcall thunk))
+                                   (abort ()
+                                     (format *trace-output* "~&Aborting request thread for ID ~a~%" id)
+                                     (finish-output *trace-output*)
+                                     (return nil)))
+                              (with-jsonrpc-client-lock (jsonrpc-client)
+                                (remhash id (request-threads jsonrpc-client))))))
                         :name (format nil "~a JSONRPC Request Thread" id))))
     new-thread))
 
@@ -71,12 +71,12 @@
       (bordeaux-threads:make-thread
        (lambda ()
          (loop
-          (let ((json (chanl:recv (outgoing-channel client))))
-            (when json
-              ;; (format *trace-output* "Send: ~s~%" (cl-json:encode-json-to-string json))
-              ;; (finish-output *trace-output*)
-              (format (uiop:process-info-input process-info) "~a~%" (cl-json:encode-json-to-string json))
-              (finish-output (uiop:process-info-input process-info))))))
+           (let ((json (chanl:recv (outgoing-channel client))))
+             (when json
+               ;; (format *trace-output* "Send: ~s~%" (cl-json:encode-json-to-string json))
+               ;; (finish-output *trace-output*)
+               (format (uiop:process-info-input process-info) "~a~%" (cl-json:encode-json-to-string json))
+               (finish-output (uiop:process-info-input process-info))))))
        :name (format nil "~a JSONRPC Output" name))
 
       ;; Start a thread to sink the error output from the server.
@@ -108,8 +108,8 @@
 
                           ((get-id message)
                            (let ((incoming-channel
-                                  (with-jsonrpc-client-lock (client)
-                                    (gethash (get-id message) (incoming-channels client)))))
+                                   (with-jsonrpc-client-lock (client)
+                                     (gethash (get-id message) (incoming-channels client)))))
                              (if incoming-channel
                                  (chanl:send incoming-channel message)
                                  (start-request-thread client (get-id message)
@@ -168,21 +168,21 @@
                            :method method
                            :params (if (null cursor)
                                        (if (null params)
-                                           +json-empty-object+
-                                         params)
-                                     (cond ((or (null params)
-                                                (eql params +json-empty-object+))
-                                            (object :cursor cursor))
-                                           ((alist? params)
-                                            (acons :cursor cursor params))
-                                           ((hash-table-p params)
-                                            (setf (gethash :cursor params) cursor)
-                                            params))))
+                                           (object)
+                                           params)
+                                       (cond ((or (null params)
+                                                  (eql params +json-empty-object+))
+                                              (object :cursor cursor))
+                                             ((alist? params)
+                                              (acons :cursor cursor params))
+                                             ((hash-table-p params)
+                                              (setf (gethash :cursor params) cursor)
+                                              params))))
                    id)
 
-    (let* ((response (chanl:recv incoming-channel))
-           (result (get-result response))
-           (cursor (get-next-cursor result)))
-      (if (null cursor)
-          result
-          (depaginate result (next-page (random-id) cursor)))))))
+      (let* ((response (chanl:recv incoming-channel))
+             (result (get-result response))
+             (cursor (get-next-cursor result)))
+        (if (null cursor)
+            result
+            (depaginate result (next-page (random-id) cursor)))))))

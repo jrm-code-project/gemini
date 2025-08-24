@@ -10,8 +10,8 @@
 (defun deflow (string)
   "Removes newlines from STRING and replaces them with spaces, ensuring that the result is a single line."
   (let ((lines
-            (remove-if (lambda (line) (zerop (length line)))
-                       (map 'list #'str:trim (str:split #\newline string)))))
+          (remove-if (lambda (line) (zerop (length line)))
+                     (map 'list #'str:trim (str:split #\newline string)))))
     (and lines 
          (str:join #\Space lines))))
 
@@ -35,7 +35,7 @@
           (t (iter lines (cdr words) (if (zerop (length new-line))
                                          (car words)
                                          (concatenate 'string new-line " " (car words)))
-               answer)))))
+                   answer)))))
 
 (defun dehashify (object)
   (cond ((hash-table-p object)
@@ -94,14 +94,7 @@
 (defun object (&rest fields)
   "Creates an object with the specified FIELDS.
    Returns a hash table representing the object structure."
-  (let ((object (make-hash-table :test 'equal)))
-    (let iter ((fields fields))
-      (when fields
-        (let ((field-name (->keyword (first fields)))
-              (field-value (second fields)))
-          (setf (gethash field-name object) field-value))
-        (iter (cddr fields))))
-    object))
+  (plist-hash-table fields))
 
 (defun keys (thing)
   "Returns a list of keys from an alist or a hash table.
@@ -186,14 +179,14 @@
          (CDR (ASSOC ,(->keyword name) OBJECT :KEY #'->KEYWORD))))
 
      (DEFGENERIC (SETF ,getter) (NEW-VALUE OBJECT)
-        (:DOCUMENTATION ,(format nil "Sets the '~a' field in an object." name))
-        (:METHOD (NEW-VALUE (OBJECT HASH-TABLE))
-           (SETF (GETHASH ,(->keyword name) OBJECT) NEW-VALUE))
-        (:METHOD (NEW-VALUE (OBJECT LIST))
-           (LET ((ENTRY (ASSOC ,(->keyword name) OBJECT :KEY #'->KEYWORD)))
-             (IF ENTRY
-                 (SETF (CDR ENTRY) NEW-VALUE)
-                 (ERROR "Key ~s not found in alist ~s" ,(->keyword name) OBJECT)))))))
+       (:DOCUMENTATION ,(format nil "Sets the '~a' field in an object." name))
+       (:METHOD (NEW-VALUE (OBJECT HASH-TABLE))
+         (SETF (GETHASH ,(->keyword name) OBJECT) NEW-VALUE))
+       (:METHOD (NEW-VALUE (OBJECT LIST))
+         (LET ((ENTRY (ASSOC ,(->keyword name) OBJECT :KEY #'->KEYWORD)))
+           (IF ENTRY
+               (SETF (CDR ENTRY) NEW-VALUE)
+               (ERROR "Key ~s not found in alist ~s" ,(->keyword name) OBJECT)))))))
 
 (defmacro define-standard-field (name)
   "Define a GET-<name> function and export it."
@@ -353,7 +346,7 @@
                   (str:ends-with? "-SYSTEM" name)
                   (str:ends-with? "-TEST" name)
                   (str:ends-with? "-TESTS" name)
-                  ;(find #\/ name)
+                                        ;(find #\/ name)
                   (find #\. name)
                   )))
           (list-all-packages)))

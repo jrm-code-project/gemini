@@ -50,16 +50,17 @@
       (push (content :parts (list
                              (let ((response-part (make-hash-table :test 'equal)))
                                (setf (gethash "functionResponse" response-part)
-                                     (function-response
-                                      :name "eval"
-                                      :response (let ((response (make-hash-table :test 'equal)))
-                                                  (setf (gethash "result" response)
-                                                        (if (null values)
-                                                            "No values"
-                                                            (if (= (length values) 1)
-                                                                (format nil "~S" (car values))
-                                                                (format nil "~{~S~^, ~}" values))))
-                                                  response)))
+                                     {
+                                     :name "eval"
+                                     :response (let ((response (make-hash-table :test 'equal)))
+                                                 (setf (gethash "result" response)
+                                                       (if (null values)
+                                                           "No values"
+                                                           (if (= (length values) 1)
+                                                               (format nil "~S" (car values))
+                                                               (format nil "~{~S~^, ~}" values))))
+                                                 response)
+                                     })
                                response-part))
                      :role "function")
             *history*)

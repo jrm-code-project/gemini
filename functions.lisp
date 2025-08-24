@@ -59,7 +59,7 @@
                              :properties (object :string
                                                  (schema :type :string
                                                          :description "The string to check if it is a complete s-expression or a single Lisp atom."))
-                             :required (list "string"))
+                             :required (vector :string))
          :response (schema :type :boolean))
         (lambda (&key string)
           (handler-case
@@ -83,7 +83,7 @@
                              :properties (object :symbol
                                                  (schema :type :string
                                                          :description "The name of the symbol to describe."))
-                             :required (list "symbol"))
+                             :required (vector :symbol))
          :response (schema :type :string
                            :description "The description of symbol, it's value, it's documentation, and any other relevant information.  Returns an error message if the symbol is not found."))
         (lambda (&key symbol)
@@ -103,7 +103,7 @@
                              :properties (object :string
                                                  (schema :type :string
                                                          :description "The string containing the Lisp expression to evaluate.  This should be a complete s-expression or a single Lisp atom."))
-                             :required (list "string"))
+                             :required (vector :string))
          :response (schema :type :string
                            :description "The printed representation of the result of evaluating the expression, or an error message if the expression cannot be evaluated."))
         (lambda (&key string)
@@ -136,7 +136,7 @@
                              :properties (object :url
                                                  (schema :type :string
                                                          :description "The URL to send the GET request to."))
-                             :required (list "url"))
+                             :required (vector :url))
          :response (schema :type :string))
         (lambda (&key url)
           (dexador:get url))))
@@ -151,7 +151,7 @@
                              :properties (object :symbol
                                                  (schema :type :string
                                                          :description "The name of the symbol to check."))
-                             :required (list "symbol"))
+                             :required (vector :symbol))
          :response (schema :type :boolean))
         (lambda (&key symbol)
           (let ((sym (find-symbol (string-upcase symbol))))
@@ -170,7 +170,7 @@
                              :properties (object :symbol 
                                                  (schema :type :string
                                                          :description "The name of the symbol to check."))
-                             :required (list "symbol"))
+                             :required (vector :symbol))
          :response (schema :type :boolean))
         (lambda (&key symbol)
           (let ((sym (find-symbol (string-upcase symbol))))
@@ -189,7 +189,7 @@
                              :properties (object :symbol
                                                  (schema :type :string
                                                          :description "The name of the symbol to check."))
-                             :required (list "symbol"))
+                             :required (vector :symbol))
          :response (schema :type :boolean))
         (lambda (&key symbol)
           (let ((sym (find-symbol (string-upcase symbol))))
@@ -211,7 +211,7 @@
                              :properties (object :symbol
                                                  (schema :type :string
                                                          :description "The name of the symbol to check."))
-                             :required (list "symbol"))
+                             :required (vector :symbol))
          :response (schema :type :boolean))
         (lambda (&key symbol)
           (let ((sym (find-symbol (string-upcase symbol))))
@@ -231,7 +231,7 @@
                              :properties (object :symbol
                                                  (schema :type :string
                                                          :description "The name of the symbol to check."))
-                             :required (list "symbol"))
+                             :required (vector :symbol))
          :response (schema :type :boolean))
         (lambda (&key symbol)
           (let ((sym (find-symbol (string-upcase symbol))))
@@ -302,7 +302,7 @@
                              :properties (object :system
                                                  (schema :type :string
                                                          :description "The name of the system to load."))
-                             :required (list "system"))
+                             :required (vector :system))
          :response (schema :type :string))
         (lambda (&key system)
           (format nil "~s" (asdf:load-system system)))))
@@ -317,7 +317,7 @@
                              :properties (object :system
                                                  (schema :type :string
                                                          :description "The name of the system to load."))
-                             :required (list "system"))
+                             :required (vector :system))
          :response (schema :type :string))
         (lambda (&key system)
           (format nil "~s" (ql:quickload system)))))
@@ -395,7 +395,7 @@
                            :properties (object :string
                                                (schema :type :string
                                                        :description "The string to print."))
-                           :required (list "string")))
+                           :required (vector :string)))
       (lambda (&key string)
         (print string)
         (values)))
@@ -410,7 +410,7 @@
                              :properties (object :symbol
                                                  (schema :type :string
                                                          :description "The name of the symbol to retrieve the value of."))
-                             :required (list "symbol"))
+                             :required (vector :symbol))
          :response (schema :type :string
                            :description "The printed representation of the value of symbol, or an error message if the symbol is not found."))
         (lambda (&key symbol)
@@ -429,7 +429,7 @@
                              :properties (object :prompt
                                                  (schema :type :string
                                                          :description "The prompt to send to the user.  This should be a complete sentence or question."))
-                             :required (list "prompt"))
+                             :required (vector :prompt))
          :response (schema :type :string
                            :description "The user's input response."))
         (lambda (&key prompt)
@@ -445,7 +445,7 @@
                              :properties (object :prompt
                                                  (schema :type :string
                                                          :description "The prompt to send to the LLM.  This should be a complete sentence or question."))
-                             :required (list "prompt"))
+                             :required (vector :prompt))
          :response (schema :type :string
                            :description "The LLM's response to the prompt."))
         (lambda (&key prompt)
@@ -457,11 +457,13 @@
        :name "randomInteger"
        :description "Returns a random integer between 0 and the given maximum value (exclusive).  Use this to generate random numbers."
        :behavior :blocking
-       :parameters (schema :type :object
-                           :properties (object :max
-                                               (schema :type :integer
-                                                       :description "The maximum value for the random integer.  Must be a positive integer."))
-                           :required (list "max"))
+       :parameters (schema
+                    :type :object
+                    :properties (object
+                                 :max (schema
+                                       :type :integer
+                                       :description "The maximum value for the random integer.  Must be a positive integer."))
+                    :required (vector :max))
        :response (schema :type :integer))
       (lambda (&key max)
         (if (and (integerp max) (> max 0))
@@ -492,10 +494,11 @@
          :behavior :blocking
          :parameters (schema
                       :type :object
-                      :properties (object :symbol
-                                          (schema :type :string
-                                                  :description "The name of the symbol to retrieve the value of."))
-                      :required (list "symbol"))
+                      :properties (object
+                                   :symbol (schema
+                                            :type :string
+                                            :description "The name of the symbol to retrieve the value of."))
+                      :required (vector :symbol))
          :response (schema :type :string
                            :description "The boolean value of symbol."))
         (lambda (&key symbol)
@@ -510,11 +513,13 @@
          :name "symbolValueAsInteger"
          :description "Returns the integer value of a symbol in the Lisp environment.  Returns 0 if symbol value is not an integer."
          :behavior :blocking
-         :parameters (schema :type :object
-                             :properties (object :symbol
-                                                 (schema :type :string
-                                                         :description "The name of the symbol to retrieve the value of."))
-                             :required (list "symbol"))
+         :parameters (schema
+                      :type :object
+                      :properties (object
+                                   :symbol (schema
+                                            :type :string
+                                            :description "The name of the symbol to retrieve the value of."))
+                      :required (vector :symbol))
          :response (schema :type :string
                            :description "The integer value of symbol."))
         (lambda (&key symbol)
@@ -534,7 +539,7 @@
                       :properties (object :symbol
                                           (schema :type :string
                                                   :description "The name of the symbol to retrieve the value of."))
-                      :required (list "symbol"))
+                      :required (vector :symbol))
          :response (schema
                     :type :string
                     :description "The string value of symbol.  Return the empty string if symbol is not bound to a string."))
@@ -554,8 +559,9 @@
          :behavior :blocking
          :parameters (schema :type :object
                              :properties (object :term
-                                                 (schema :type :string))
-                             :required (list "term"))
+                                                 (schema :type :string
+                                                         :description "The search term to use for the apropos search."))
+                             :required (vector :term))
          :response (schema :type :array
                            :items (schema :type :string)))
         (lambda (&key term)
@@ -571,7 +577,7 @@
                              :properties (object :system
                                                  (schema :type :string
                                                          :description "The name of the system to describe."))
-                             :required (list "system"))
+                             :required (vector :system))
          :response (schema :type :array
                            :items (schema :type :string)))
         (lambda (&key system)
@@ -600,17 +606,17 @@
                              :properties (object :search-terms
                                                  (schema :type :string
                                                          :description "The search terms to use for the web search.  Use spaces to separate terms."))
-                             :required (list "searchTerms"))
+                             :required (vector :search-terms))
          :response (schema :type :object
                            :properties (object :items
                                                (schema :type :array
                                                        :items (schema :type :object
-                                                                      :properties (object
+                                                                      :properties (object 
                                                                                    :title (schema :type :string)
                                                                                    :link (schema :type :string)
                                                                                    :snippet (schema :type :string))
-                                                                      :required (list "title" "link" "snippet"))))
-                           :required (list "items")))
+                                                                      :required (vector :link :snippet :title))))
+                           :required (vector :items)))
         (lambda (&key search-terms)
           (format *trace-output* "~&;; Search Terms: ~{~a~^ ~}~%" (str:split " " search-terms :omit-nulls t))
           (finish-output *trace-output*)
@@ -618,7 +624,8 @@
                   (map 'list (lambda (item)
                                (object :title (get-title item)
                                        :link (get-link item)
-                                       :snippet (get-snippet item)))
+                                       :snippet (get-snippet item))
+                               )
                        (get-items
                         (web-search
                          (str:join "+" (str:split " " search-terms :omit-nulls t)))))))))
@@ -633,7 +640,7 @@
                              :properties (object :question
                                                  (schema :type :string
                                                          :description "The question to ask the user."))
-                             :required (list "question"))
+                             :required (vector :question))
          :response (schema :type :boolean
                            :description "Returns true or false based on user input."))
         (lambda (&key question)
@@ -651,8 +658,7 @@
                              :properties (object :question
                                                  (schema :type :string
                                                          :description "The question to ask the user."))
-
-                             :required (list "question")) ; The question is required.
+                             :required (vector :question))
          :response (schema :type :boolean
                            :description "Returns true or false based on user input."))
         (lambda (&key question)
@@ -667,7 +673,7 @@
 
 (defun convert-tool (mcp-client tool)
   "Converts an MCP tool to a function specification."
-  (let ((input-schema  (get-input-schema tool))
+  (let ((input-schema (get-input-schema tool))
         (output-schema (get-output-schema tool)))
 
     (cons (function-declaration
@@ -677,11 +683,9 @@
            :parameters (encode-schema-type input-schema)
            :response (encode-schema-type output-schema))
           (lambda (&rest args &key &allow-other-keys)
-            (call-tool mcp-client tool (apply #'object args))))))
+            (call-tool mcp-client tool (plist-hash-table args))))))
 
 (defun get-mcp-functions-and-handlers (mcp-client)
   "Returns the functions and handlers for the given MCP client."
   (when (has-tools-capability? mcp-client)
     (map 'list (lambda (tool) (convert-tool mcp-client tool)) (get-tools mcp-client))))
-
-

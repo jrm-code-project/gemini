@@ -6,8 +6,7 @@
   "The default model to use for the Gemini API.
    This can be overridden by the MODEL keyword argument in `invoke-gemini`.")
 
-(defparameter
-  +gemini-api-base-url+
+(defparameter +gemini-api-base-url+
   "https://generativelanguage.googleapis.com/v1beta/models/"
   "The base URL for the Gemini API endpoints.")
 
@@ -41,12 +40,12 @@
    Provides a default tools object for generation."
   (if (boundp '*tools*)
       *tools*
-    (let ((tools (object)))
-      (let ((function-declarations (default-function-declarations)))
-        (when function-declarations
-          (setf (get-function-declarations tools) function-declarations)))
-      (unless (zerop (hash-table-count tools))
-        tools))))
+      (let ((tools (object)))
+        (let ((function-declarations (default-function-declarations)))
+          (when function-declarations
+            (setf (get-function-declarations tools) function-declarations)))
+        (unless (zerop (hash-table-count tools))
+          tools))))
 
 (defun default-generation-config ()
   "Returns a default generation configuration object.
@@ -54,7 +53,7 @@
    related to candidate generation, safety, and response formatting."
   (if (boundp '*generation-config*)
       *generation-config*
-      (let ((gen-config (object)))
+      (let ((gen-config (object )))
         (let ((candidate-count (default-candidate-count)))
           (when candidate-count
             (setf (get-candidate-count gen-config) candidate-count)))
@@ -148,11 +147,12 @@
   (ecase (get-type-enum schema)
     (:array (let ((item-schema (get-items schema)))
               (map 'vector (lambda (item)
-                           (default-process-arg-value item item-schema))
+                             (default-process-arg-value item item-schema))
                    arg)))
     (:boolean arg)
     (:integer (if (integerp arg) arg (error "Expected integer, got ~s" arg)))
-    (:object  arg)
+    (:number arg)
+    (:object arg)
     (:string arg)))
 
 (defun default-process-arg (arg schema)
@@ -184,16 +184,23 @@
     ;; (format *trace-output* "~&;; Processing function call: ~s~%" (dehashify function-call-part))
     (format *trace-output* "~&;; Invoking function: ~a(~{~a~^, ~})~%" name arglist)
     (let ((response
-            (object :function-response
-                    (function-response
-                     :name name
-                     :response (cond ((null entry)
-                                      (object :error (format nil "Function `~s` does not exist." name)))
-                                     ((null handler)
-                                      (object :error (format nil "Function `~s` has no handler." name)))
-                                     ((not (functionp handler))
-                                      (object :error (format nil "Handler for `~s` is not a function." name)))
-                                     (t (object :result (apply handler arglist))))))))
+            (object  :function-response
+                     (object 
+                      :name name
+                      :response (cond ((null entry)
+                                       (object  :error (format nil "Function `~s` does not exist." name)
+                                                ))
+                                      ((null handler)
+                                       (object  :error (format nil "Function `~s` has no handler." name)
+                                                ))
+                                      ((not (functionp handler))
+                                       (object  :error (format nil "Handler for `~s` is not a function." name)
+                                                ))
+                                      (t (object  :result (apply handler arglist)
+                                                  )))
+                      )
+                     )
+            ))
       ;; (format *trace-output* "~&;; Function call response: ~s~%" (dehashify response))
       response)))
 
@@ -221,12 +228,12 @@
         (t (error "Unrecognized type for prompt: ~s" thing))))
   
 (defun print-token-usage (results)
-    "Prints the token usage information from the results.
+  "Prints the token usage information from the results.
      Returns the results unchanged."
-    (let ((usage-metadata (get-usage-metadata results)))
-      (when usage-metadata
-        (process-usage-metadata usage-metadata)))
-    results)
+  (let ((usage-metadata (get-usage-metadata results)))
+    (when usage-metadata
+      (process-usage-metadata usage-metadata)))
+  results)
 
 (defun strip-thoughts-from-part (part)
   (if (thought-part? part)
@@ -240,7 +247,7 @@
 (defun strip-thoughts-from-content (content)
   (let* ((parts* (strip-thoughts-from-parts (get-parts content))))
     (when parts*
-      (let ((stripped (object :parts parts*)))
+      (let ((stripped (object  :parts parts*)))
         (when (get-role content)
           (setf (get-role stripped) (get-role content)))
         stripped))))
@@ -263,7 +270,7 @@
 (defun strip-and-print-thoughts (results)
   (let ((candidates* (strip-thoughts-from-candidates (get-candidates results))))
     (when candidates*
-      (let ((stripped (object :candidates candidates*)))
+      (let ((stripped (object  :candidates candidates*)))
         (when (get-model-version results)
           (setf (get-model-version stripped) (get-model-version results)))
         (when (get-response-id results)
@@ -311,30 +318,30 @@
           (assert (list-of-parts? function-calls) () "Expected function-calls to be a list of parts.")
           (assert (list-of-parts? function-results) () "Expected function-results to be a list of parts.")
           (invoke-gemini
-            (list (content :parts function-calls
-                           :role "model")
-                  (content :parts function-results
-                           :role "function"))))
-      (or (and *return-text-string* (as-singleton-text-string results))
-          results))))
+           (list (content :parts function-calls
+                          :role "model")
+                 (content :parts function-results
+                          :role "function"))))
+        (or (and *return-text-string* (as-singleton-text-string results))
+            results))))
 
 (defparameter *output-processor* (compose #'tail-call-functions #'strip-and-print-thoughts #'print-token-usage)
-    "The default output processor for the Gemini API.")
+  "The default output processor for the Gemini API.")
 
 (defun invoke-gemini (prompt &key
-                             ((:model *model*) +default-model+)
-                             (cached-content (default-cached-content))
-                             (generation-config (default-generation-config))
-                             (tools (default-tools))
-                             (tool-config (default-tool-config))
-                             (safety-settings (default-safety-settings))
-                             (system-instruction (default-system-instruction)))
+                               ((:model *model*) +default-model+)
+                               (cached-content (default-cached-content))
+                               (generation-config (default-generation-config))
+                               (tools (default-tools))
+                               (tool-config (default-tool-config))
+                               (safety-settings (default-safety-settings))
+                               (system-instruction (default-system-instruction)))
   (let ((prompt* (->prompt prompt)))
     (assert (list-of-content? prompt*)
             () "Prompt must be a list of content objects.")
     (setq *prior-model* *model*)
     (let* ((*history* (revappend prompt* *history*))
-           (payload (object :contents (reverse *history*))))
+           (payload (object  :contents (reverse *history*) )))
       (setq *prior-history* *history*)
       (when cached-content
         (setf (get-cached-content payload) cached-content))

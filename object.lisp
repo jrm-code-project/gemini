@@ -191,7 +191,7 @@
                                                            (remove "additional-properties"
                                                                    alist
                                                                    :key #'car :test #'equal)
-                                                              :key #'car :test #'eql)
+                                                           :key #'car :test #'eql)
                                                    :key #'car :test #'equal)
                                            :key #'car :test #'eql))))
            (if (every #'eq alist new-alist)
@@ -283,12 +283,12 @@
     "Predicate to check if a thing is a singleton list of a content object.")
 
 (deff function-call?
-  (is-object-test '(:name) '(:args :id))
+    (is-object-test '(:name) '(:args :id))
     "Predicate to check if a thing is a valid function call.")
 
 (deff function-response?
-  (is-object-test '(:name :response)
-                  '(:id :scheduling :will-continue))
+    (is-object-test '(:name :response)
+                    '(:id :scheduling :will-continue))
     "Predicate to check if a thing is a valid function response.")
 
 (deff file-data?
@@ -296,8 +296,8 @@
     "Predicate to check if a thing is a valid file data.")
 
 (deff executable-code?
-  (is-object-test '(:code :language))
-  "Predicate to check if a thing is a valid executable code.")
+    (is-object-test '(:code :language))
+    "Predicate to check if a thing is a valid executable code.")
 
 (deff code-execution-result?
     (is-object-test '(:outcome) '(:output))
@@ -350,10 +350,10 @@
       (code-execution-result-part? thing)))
 
 (deff list-of-parts? (list-of-test #'part?)
-  "Predicate to check if a thing is a list of part objects.")
+    "Predicate to check if a thing is a list of part objects.")
 
 (deff singleton-list-of-parts? (singleton-list-of-test #'part?)
-  "Predicate to check if a thing is a singleton list of a part object.")
+    "Predicate to check if a thing is a singleton list of a part object.")
 
 (deff list-of-strings? (list-of-test #'stringp)
     "Predicate to check if a thing is a list of strings.")
@@ -399,11 +399,6 @@
     (when responseJsonSchema
       (setf (get-response-json-schema declaration) responseJsonSchema))
     declaration))
-
-(defun function-response (&key name response)
-  "Creates a function response object with the specified NAME and RESPONSE.
-   Returns a hash table representing the function response structure."
-  (object :name name :response response))
 
 (defun part (data &key metadata thought thought-signature)
   "Creates a part object for content. The DATA can be a string (text),
