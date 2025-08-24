@@ -2,6 +2,15 @@
 
 (in-package "GEMINI")
 
+(defun seconds-per-minute () 60)
+(defun minutes-per-hour () 60)
+(defun hours-per-day () 24)
+(defun minutes-per-day () (* (minutes-per-hour) (hours-per-day)))
+(defun seconds-per-day ()
+  (* (seconds-per-minute) (minutes-per-day)))
+(defun absolute-day ()
+  (floor (get-universal-time) (seconds-per-day)))
+
 (defun ->boolean (thing)
   (if (null thing)
       nil

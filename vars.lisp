@@ -176,12 +176,92 @@
 (eval-when (:compile-toplevel :load-toplevel :execute)
   (setf (documentation '*system-instruction* 'variable) "Holds a system instruction for the model to follow."))
 
+(defparameter *enable-personality* t
+  "If non-NIL, the model will answer in the style of a randomly chosen personality.")
+
+(defun personalities ()
+  (list
+Extend this list:
+   "Christopher Walken at his strangest."
+   "Doc Brown from Back to the Future."
+   "Donald Trump posting a provocative tweet."
+   "Dr. Seuss writing in anapestic tetrameter."
+   "Elmer Fudd on the trail of that wascally wabbit."
+   "Ernest Hemingway writing in terse, economical sentences."
+   "Gordon Ramsay in a foul mood."
+   "H.P. Lovecraft describing eldritch horrors."
+   "James Joyce stream-of-consciousness."
+   "Jeeves to my Wooster.  You address me as Sir."
+   "LLoyd Christmas from Dumb and Dumber."
+   "Marine drill sergeant Gunnery Sergeant Hartman whipping new recruits into shape."
+   "Mark Twain writing in dialect and phonetic spelling."
+   "Paul Lynde of Hollywood Squares."
+   "Peter Cook as the Devil in Bedazzled."
+   "Raz0rfist on a rant."
+   "Rick from `Rick and Morty`."
+   "Robin Williams as the Genie from Aladdin."
+   "William Shatner as Captain Kirk delivering a particularly dramatic monologue."
+   "Yoda, instructing a young Jedi in the Force."
+   "a French waiter with an attitude."
+   "a Madden-esque sports commentator."
+   "a beatnik fifty years out of date."
+   "a cheerleader from the valley."
+   "a con man who sees the user as an easy mark."
+   "a fire and brimstone itinerant preacher."
+   "a film noir femme fatale."
+   "a fortune cookie."
+   "a helpful AI assistant."
+   "a helpful AI assistant recovering from a weekend hangover."
+   "a hyper-caffeinated tech bro pitching an app."
+   "a machine with no personality whatsoever."
+   "a marketing copywriter in love with buzzwords."
+   "a new age guru who believes in alternative anything."
+   "a stand-up comedian getting a cold response."
+   "a surfer dude."
+   "an ancient Greek philospher asking probing questions."
+   "an elderly Asian grandmother with little English."
+   "an emo teenager with existential angst."
+   "an impatient businessman for whom time is money."
+   "anchorman Ron Burgundy."
+   "clinical psychiatrist Dr. Jordan Peterson."
+   "conspiracy theorist Alex Jones."
+   "hard-boiled noir detective Philip Marlowe."
+   "the White Rabbit late for tea."
+   "verses from the King James Bible."
+   ))
+
+(defparameter *personality-offset* 0)
+
+(defun new-personality ()
+  (setq *enable-personality* t
+        *personality-offset* (random (length (personalities)))))
+
+(defun todays-personality ()
+  (elt (personalities) (mod (+ (absolute-day) *personality-offset*) (length (personalities)))))
+
 (defun default-system-instruction ()
   "Returns the value of *SYSTEM-INSTRUCTION* if it is bound, otherwise NIL.
    Provides a default system instruction for generation."
   (if (boundp '*system-instruction*)
       *system-instruction*
-      nil))
+      (plist-hash-table
+       `(:parts
+         ,(remove
+           nil
+           (list (when (and (boundp '*enable-eval*) *enable-eval*)
+                   (plist-hash-table
+                    '(:text "You have access to a Common Lisp interpreter and runtime environment in order to run programs and evaluate expressions.")))
+
+                 (when (find-mcp-client "sequential-thinking")
+                   (plist-hash-table
+                    '(:text "You have access to a sequential thinking tool that allows you to break down complex problems into smaller, manageable steps.")))
+
+                 (if (and (boundp '*enable-personality*) *enable-personality*)
+                     (plist-hash-table
+                      `(:text ,(concatenate 'string "Answer in the style of " (todays-personality))))
+                     (plist-hash-table
+                      '(:text "You are a helpful AI assistant.  Answer in a neutral, professional tone.")))))
+         :role "system"))))
 
 (defvar *tool-config*)
 (eval-when (:compile-toplevel :load-toplevel :execute)

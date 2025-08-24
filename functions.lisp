@@ -97,7 +97,7 @@
        (cons
         (function-declaration
          :name "eval"
-         :description "Evaluates an expression and returns the printed representation of the result.  If evaluation can produce permanent side effects, get positive confirmation from the user before calling this function."
+         :description "Evaluates a Lisp expression and returns the printed representation of the result.  Gives access to a persistent Lisp environment.  Use this to define Lisp programs for later use or to call previously defined Lisp programs.  If evaluation can produce permanent side effects, get positive confirmation from the user before calling this function."
          :behavior :blocking
          :parameters (schema :type :object
                              :properties (object :string

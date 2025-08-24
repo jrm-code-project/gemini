@@ -184,19 +184,19 @@
     ;; (format *trace-output* "~&;; Processing function call: ~s~%" (dehashify function-call-part))
     (format *trace-output* "~&;; Invoking function: ~a(~{~a~^, ~})~%" name arglist)
     (let ((response
-            (object  :function-response
+            (object :function-response
                      (object 
                       :name name
                       :response (cond ((null entry)
-                                       (object  :error (format nil "Function `~s` does not exist." name)
+                                       (object :error (format nil "Function `~s` does not exist." name)
                                                 ))
                                       ((null handler)
-                                       (object  :error (format nil "Function `~s` has no handler." name)
+                                       (object :error (format nil "Function `~s` has no handler." name)
                                                 ))
                                       ((not (functionp handler))
-                                       (object  :error (format nil "Handler for `~s` is not a function." name)
+                                       (object :error (format nil "Handler for `~s` is not a function." name)
                                                 ))
-                                      (t (object  :result (apply handler arglist)
+                                      (t (object :result (apply handler arglist)
                                                   )))
                       )
                      )
@@ -247,7 +247,7 @@
 (defun strip-thoughts-from-content (content)
   (let* ((parts* (strip-thoughts-from-parts (get-parts content))))
     (when parts*
-      (let ((stripped (object  :parts parts*)))
+      (let ((stripped (object :parts parts*)))
         (when (get-role content)
           (setf (get-role stripped) (get-role content)))
         stripped))))
@@ -270,7 +270,7 @@
 (defun strip-and-print-thoughts (results)
   (let ((candidates* (strip-thoughts-from-candidates (get-candidates results))))
     (when candidates*
-      (let ((stripped (object  :candidates candidates*)))
+      (let ((stripped (object :candidates candidates*)))
         (when (get-model-version results)
           (setf (get-model-version stripped) (get-model-version results)))
         (when (get-response-id results)
@@ -341,7 +341,7 @@
             () "Prompt must be a list of content objects.")
     (setq *prior-model* *model*)
     (let* ((*history* (revappend prompt* *history*))
-           (payload (object  :contents (reverse *history*) )))
+           (payload (object :contents (reverse *history*) )))
       (setq *prior-history* *history*)
       (when cached-content
         (setf (get-cached-content payload) cached-content))
@@ -355,7 +355,32 @@
         (setf (get-tools payload) tools))
       (when (and tools tool-config)
         (setf (get-tool-config payload) tool-config))
-      (funcall *output-processor* (%invoke-gemini *model* payload)))))
+      (or (funcall *output-processor* (%invoke-gemini *model* payload))
+          (reinvoke-gemini)))))
+
+(defun reinvoke-gemini (&key
+                               ((:model *model*) +default-model+)
+                               (cached-content (default-cached-content))
+                               (generation-config (default-generation-config))
+                               (tools (default-tools))
+                               (tool-config (default-tool-config))
+                               (safety-settings (default-safety-settings))
+                               (system-instruction (default-system-instruction)))
+    (let ((payload (object :contents (reverse *prior-history*))))
+      (when cached-content
+        (setf (get-cached-content payload) cached-content))
+      (when generation-config
+        (setf (get-generation-config payload) generation-config))
+      (when safety-settings
+        (setf (get-safety-settings payload) safety-settings))
+      (when system-instruction
+        (setf (get-system-instruction payload) system-instruction))
+      (when tools
+        (setf (get-tools payload) tools))
+      (when (and tools tool-config)
+        (setf (get-tool-config payload) tool-config))
+      (or (funcall *output-processor* (%invoke-gemini *model* payload))
+          (reinvoke-gemini))))
 
 (defun continue-gemini (content)
   "Continues the conversation with the Gemini model using the provided CONTENT.
