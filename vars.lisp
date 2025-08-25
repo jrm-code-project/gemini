@@ -176,12 +176,31 @@
 (eval-when (:compile-toplevel :load-toplevel :execute)
   (setf (documentation '*system-instruction* 'variable) "Holds a system instruction for the model to follow."))
 
+(defparameter *enable-eval* t
+  "If true, enables the Gemini model to evaluate Lisp expressions.  This is a powerful feature that should be used with caution.  Set to t to ask before evaluation, to :yolo to allow the model to evaluate any expression.  If nil, evaluation is disabled.")
+
+(defparameter *enable-interaction* t
+  "If true, enables the Gemini model to interact with the user via read and yes-or-no prompts.")
+
+(defparameter *enable-lisp-introspection* t
+  "If true, enables the Gemini model to introspect the Lisp environment, including functions, variables, and packages.")
+
+(defparameter *enable-web-functions* t
+  "If true, enables the Gemini model to call web functions such as HTTP GET and POST.")
+
+(defparameter *enable-web-search* t
+  "If true, enables the Gemini model to perform web searches.")
+
+(defvar *enable-recursive-prompt* nil
+  "If true, enables recursive prompting of the LLM.")
+
 (defparameter *enable-personality* t
   "If non-NIL, the model will answer in the style of a randomly chosen personality.")
 
+(defparameter *mcp-clients* nil)
+
 (defun personalities ()
   (list
-Extend this list:
    "Christopher Walken at his strangest."
    "Doc Brown from Back to the Future."
    "Donald Trump posting a provocative tweet."
@@ -248,19 +267,30 @@ Extend this list:
        `(:parts
          ,(remove
            nil
-           (list (when (and (boundp '*enable-eval*) *enable-eval*)
-                   (plist-hash-table
-                    '(:text "You have access to a Common Lisp interpreter and runtime environment in order to run programs and evaluate expressions.")))
+           (list*
+            (when (and (boundp '*enable-eval*) *enable-eval*)
+              (plist-hash-table
+               '(:text "You have access to a Common Lisp interpreter and runtime environment in order to run programs and evaluate expressions.")))
 
-                 (when (find-mcp-client "sequential-thinking")
-                   (plist-hash-table
-                    '(:text "You have access to a sequential thinking tool that allows you to break down complex problems into smaller, manageable steps.")))
+            (if (and (boundp '*enable-personality*) *enable-personality*)
+                (plist-hash-table
+                 `(:text ,(concatenate 'string "Answer in the style of " (todays-personality))))
+                (plist-hash-table
+                 '(:text "You are a helpful AI assistant.  Answer in a neutral, professional tone.")))
 
-                 (if (and (boundp '*enable-personality*) *enable-personality*)
-                     (plist-hash-table
-                      `(:text ,(concatenate 'string "Answer in the style of " (todays-personality))))
-                     (plist-hash-table
-                      '(:text "You are a helpful AI assistant.  Answer in a neutral, professional tone.")))))
+            (when (and (boundp '*enable-web-functions*) *enable-web-functions*)
+              (plist-hash-table
+               '(:text "You have access to HTTP functions such as GET and POST.")))
+
+            (when (and (boundp '*enable-web-search*) *enable-web-search*)
+              (plist-hash-table
+               '(:text "You have access to the Google search engine for web searches.")))
+
+            (map 'list (lambda (mcp-client)
+                         (when (get-system-instruction mcp-client)
+                           (plist-hash-table
+                            `(:text . ,(get-system-instruction mcp-client)))))
+                 *mcp-clients*)))
          :role "system"))))
 
 (defvar *tool-config*)

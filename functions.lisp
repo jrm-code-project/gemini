@@ -2,24 +2,6 @@
 
 (in-package "GEMINI")
 
-(defparameter *enable-eval* t
-  "If true, enables the Gemini model to evaluate Lisp expressions.  This is a powerful feature that should be used with caution.  Set to t to ask before evaluation, to :yolo to allow the model to evaluate any expression.  If nil, evaluation is disabled.")
-
-(defparameter *enable-interaction* t
-  "If true, enables the Gemini model to interact with the user via read and yes-or-no prompts.")
-
-(defparameter *enable-lisp-introspection* t
-  "If true, enables the Gemini model to introspect the Lisp environment, including functions, variables, and packages.")
-
-(defparameter *enable-web-functions* t
-  "If true, enables the Gemini model to call web functions such as HTTP GET and POST.")
-
-(defparameter *enable-web-search* t
-  "If true, enables the Gemini model to perform web searches.")
-
-(defvar *enable-recursive-prompt* nil
-  "If true, enables recursive prompting of the LLM.")
-
 (defun standard-functions-and-handlers ()
   "Return a list of standard functions and their handlers."
   (append

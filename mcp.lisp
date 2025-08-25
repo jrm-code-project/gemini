@@ -110,14 +110,15 @@
   (setf (gethash resource-uri (resource-subscriptions mcp-client)) receiver)
   (jsonrpc (jsonrpc-client mcp-client) "resources/subscribe" (object :uri resource-uri)))
 
+(defmethod get-system-instruction ((object mcp-client))
+  (get-system-instruction (config object)))
+
 (defmethod get-tools ((object mcp-client))
   (force (delayed-tools object)))
 
 (defmethod print-object ((client mcp-client) stream)
   (print-unreadable-object (client stream :type t)
     (format stream "~a" (get-name client))))
-
-(defparameter *mcp-clients* nil)
 
 (defun find-mcp-client (name)
   (find name *mcp-clients* :key #'get-name :test #'equal))

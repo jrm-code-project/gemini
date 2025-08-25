@@ -17,7 +17,7 @@
 (defparameter +json-null+  (make-instance 'json-boolean :value "null"))
 (defparameter +json-true+  (make-instance 'json-boolean :value "true"))
 (defparameter +json-empty-list+ (vector))
-(defparameter +json-empty-object+ (object))
+(defparameter +json-empty-object+ (make-hash-table))
 
 (defun set-decoder-jrm-semantics ()
   "Set the JSON decoder semantics to the following:

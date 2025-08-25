@@ -150,7 +150,7 @@
                              (default-process-arg-value item item-schema))
                    arg)))
     (:boolean arg)
-    (:integer (if (integerp arg) arg (error "Expected integer, got ~s" arg)))
+    (:integer (unless (integerp arg) (warn "Expected integer, got ~s" arg)) arg)
     (:number arg)
     (:object arg)
     (:string arg)))
