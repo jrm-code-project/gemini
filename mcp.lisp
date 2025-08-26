@@ -314,7 +314,7 @@
                           :parts (list (part system-prompt))))
                        (*max-output-tokens* max-tokens)
                        (*return-text-string* nil)
-                       (*history* (context client))
+                       (*context* (context client))
                        (*temperature* temperature)
                        (prompt (remove nil (map 'list (lambda (message)
                                                         (let* ((role (get-role message))
@@ -326,11 +326,11 @@
                                                                :parts (list (part (get-text content)))))))
                                                 messages))))
                    (if include-context
-                       (setf *prior-history* (context client))
-                       (setf *prior-history* nil))
+                       (setf *prior-context* (context client))
+                       (setf *prior-context* nil))
                    (let ((result (continue-gemini prompt)))
                      (if include-context
-                         (setf (context client) (append result *prior-history*))
+                         (setf (context client) (append result *prior-context*))
                          (setf (context client) result))
                      result))))
     (format t "~&sample: ~s~%" (dehashify sample))

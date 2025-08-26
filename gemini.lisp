@@ -227,6 +227,16 @@
          (list (content :parts (mapcar #'part thing) :role "user")))
         (t (error "Unrecognized type for prompt: ~s" thing))))
   
+(defun extend-conversation (new-content)
+  ;;(format *trace-output* "Extending conversion with new content: ~s~%" (dehashify new-content))
+  (let* ((candidates (get-candidates new-content))
+         (candidate (svref candidates 0))
+         (content (get-content candidate)))
+    (push content *context*)
+    (setq *prior-context* *context*)
+    (save-transcript *context*)
+    new-content))
+
 (defun print-token-usage (results)
   "Prints the token usage information from the results.
      Returns the results unchanged."
@@ -318,15 +328,22 @@
           (assert (list-of-parts? function-calls) () "Expected function-calls to be a list of parts.")
           (assert (list-of-parts? function-results) () "Expected function-results to be a list of parts.")
           (invoke-gemini
-           (list (content :parts function-calls
-                          :role "model")
-                 (content :parts function-results
+           (list (content :parts function-results
                           :role "function"))))
         (or (and *return-text-string* (as-singleton-text-string results))
             results))))
 
-(defparameter *output-processor* (compose #'tail-call-functions #'strip-and-print-thoughts #'print-token-usage)
+(defparameter (setq *output-processor* (compose #'tail-call-functions
+                                          #'strip-and-print-thoughts
+                                          #'print-token-usage
+                                          #'extend-conversation))
   "The default output processor for the Gemini API.")
+
+(defun current-context ()
+  (if (null *context*)
+      (list (content :parts (list (part (format nil "The following is conversation #~d." (get-universal-time))))
+                     :role "model"))
+      *context*))
 
 (defun invoke-gemini (prompt &key
                                ((:model *model*) +default-model+)
@@ -340,9 +357,10 @@
     (assert (list-of-content? prompt*)
             () "Prompt must be a list of content objects.")
     (setq *prior-model* *model*)
-    (let* ((*history* (revappend prompt* *history*))
-           (payload (object :contents (reverse *history*) )))
-      (setq *prior-history* *history*)
+    (let* ((*context* (revappend prompt* (current-context)))
+           (payload (object :contents (reverse *context*))))
+      (save-transcript *context*)
+      (setq *prior-context* *context*)
       (when cached-content
         (setf (get-cached-content payload) cached-content))
       (when generation-config
@@ -366,7 +384,7 @@
                                (tool-config (default-tool-config))
                                (safety-settings (default-safety-settings))
                                (system-instruction (default-system-instruction)))
-    (let ((payload (object :contents (reverse *prior-history*))))
+    (let ((payload (object :contents (reverse *prior-context*))))
       (when cached-content
         (setf (get-cached-content payload) cached-content))
       (when generation-config
@@ -387,5 +405,5 @@
    CONTENT can be a content object, a part object, a string, a list of content objects,
    a list of part objects, or a list of strings.
    Returns the processed response from the API."
-  (let ((*history* *prior-history*))
+  (let ((*context* *prior-context*))
     (invoke-gemini content :model *prior-model*)))

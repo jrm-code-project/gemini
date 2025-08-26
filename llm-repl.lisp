@@ -28,13 +28,13 @@
                    (format nil "~&;; Value: ~S~%" (car values)))
                   (t (format nil "~&;; Values:~%~{;;   * ~S~%~}" values)))))
       (format *standard-output* "~A" printed-values)
-      ;; Put a function call and response into the history.
+      ;; Put a function call and response into the context.
       (push (content :parts (list
                              (let ((text-part (make-hash-table :test 'equal)))
                                (setf (gethash "text" text-part) (format nil "eval ~s" form))
                                text-part))
                      :role "user")
-            *history*)
+            *context*)
       (push (content :parts (list
                              (let ((call-part (make-hash-table :test 'equal)))
                                (setf (gethash "functionCall" call-part)
@@ -46,7 +46,7 @@
                                               args)))
                                call-part))
                      :role "model")
-            *history*)
+            *context*)
       (push (content :parts (list
                              (let ((response-part (make-hash-table :test 'equal)))
                                (setf (gethash "functionResponse" response-part)
@@ -63,15 +63,15 @@
                                      })
                                response-part))
                      :role "function")
-            *history*)
+            *context*)
       (push (content :parts
                      (list (let ((text-part (make-hash-table :test 'equal)))
                              (setf (gethash "text" text-part)
                                    (format nil "~A" printed-values))
                              text-part))
                      :role "model")
-            *history*)
-      (setq *prior-history* *history*))
+            *context*)
+      (setq *prior-context* *context*))
     (apply #'values values)))
 
 (defparameter +general-repl-system-instruction+

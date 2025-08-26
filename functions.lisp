@@ -289,6 +289,38 @@
         (lambda (&key system)
           (format nil "~s" (asdf:load-system system)))))
 
+     (cons
+      (function-declaration
+       :name "loadContext"
+       :description "Loads a Gemini context file by path."
+       :behavior :blocking
+       :parameters (schema
+                    :type :object
+                    :properties (object
+                                 :filename (schema
+                                            :type :string
+                                            :description "The file that holds the context."))
+                    :required (vector :filename))
+       :response (schema :type :string))
+      (lambda (&key filename)
+        (format *trace-output* "~&Loading ~s...~%" filename)
+        (finish-output *trace-output*)
+        (let ((pathname
+               (merge-pathnames
+                (make-pathname :directory (list :relative "contexts")
+                               :name filename
+                               :type "json")
+                (user-homedir-pathname))))
+          (with-open-file (stream pathname :direction :input)
+            (do ((item (read stream nil nil) (read stream nil nil))
+                 (context nil (cons (with-decoder-jrm-semantics
+                                      (cl-json:decode-json-from-string item))
+                                    context)))
+                ((null item) (setq *context* (cons (car *context*) context)))))
+          (format *trace-output* "~&Loaded ~s...~%" filename)
+          (finish-output *trace-output*)
+          (values "loaded"))))
+
      (when *enable-lisp-introspection*
        (cons
         (function-declaration

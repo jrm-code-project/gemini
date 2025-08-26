@@ -2,6 +2,41 @@
 
 (in-package "GEMINI")
 
+(defun gemini-directory ()
+  (merge-pathnames (make-pathname :directory (list :relative "Gemini"))
+                   (user-homedir-pathname)))
+
+(defun transcript-directory ()
+  (merge-pathnames (make-pathname :directory (list :relative "transcripts"))
+                   (gemini-directory)))
+
+(defun save-transcript (context)
+  (ensure-directories-exist (transcript-directory))
+  (let* ((initial-text (get-text (car (get-parts (car (last context))))))
+         (sharp-pos (position #\# initial-text))
+         (dot-pos (position #\. initial-text :start sharp-pos))
+         (conversation-number (subseq initial-text (1+ sharp-pos) dot-pos))
+         (turn-number (length context))
+         (new-filename (format nil "~a-~d" conversation-number turn-number))
+         (new-pathname (merge-pathnames
+                          (make-pathname
+                           :name new-filename
+                           :type "txt")
+                          (transcript-directory)))
+         (old-filename (format nil "~a-~d" conversation-number (1- turn-number)))
+         (old-pathname  (merge-pathnames
+                          (make-pathname
+                           :name old-filename
+                           :type "txt")
+                          (transcript-directory))))
+    (with-open-file (out new-pathname
+                         :direction :output
+                         :if-exists :supersede)
+      (dolist (content (reverse context) (finish-output out))
+        (format out "~&~s~%" (cl-json:encode-json-to-string content))))
+    (when (probe-file old-pathname)
+      (delete-file old-pathname))))
+
 (defvar *cached-content*)
 (eval-when (:compile-toplevel :load-toplevel :execute)
   (setf (documentation '*cached-content* 'variable)
@@ -258,6 +293,13 @@
 (defun todays-personality ()
   (elt (personalities) (mod (+ (absolute-day) *personality-offset*) (length (personalities)))))
 
+(defun call-without-personality (thunk)
+  (let ((*enable-personality* nil))
+    (funcall thunk)))
+
+(defmacro without-personality (&body body)
+  `(CALL-WITHOUT-PERSONALITY (LAMBDA () ,@body)))
+
 (defun default-system-instruction ()
   "Returns the value of *SYSTEM-INSTRUCTION* if it is bound, otherwise NIL.
    Provides a default system instruction for generation."
@@ -501,12 +543,12 @@
 (eval-when (:compile-toplevel :load-toplevel :execute)
   (setf (documentation '*generation-config* 'variable) "Holds the overall generation configuration for the model."))
 
-(defvar *history* '()
-  "Holds the conversation history as a list of content objects.
+(defvar *context* '()
+  "Holds the conversation context as a list of content objects.
    This is used to maintain context across multiple API calls.")
 
-(defparameter *prior-history* '()
-  "Holds the prior conversation history as a list of content objects.
+(defparameter *prior-context* '()
+  "Holds the prior conversation context as a list of content objects.
    This is used to maintain context across multiple API calls, especially for multi-turn conversations.")
 
 (defvar *model*)
