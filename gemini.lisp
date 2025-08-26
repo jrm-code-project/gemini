@@ -333,10 +333,10 @@
         (or (and *return-text-string* (as-singleton-text-string results))
             results))))
 
-(defparameter (setq *output-processor* (compose #'tail-call-functions
+(defparameter *output-processor* (compose #'tail-call-functions
                                           #'strip-and-print-thoughts
                                           #'print-token-usage
-                                          #'extend-conversation))
+                                          #'extend-conversation)
   "The default output processor for the Gemini API.")
 
 (defun current-context ()
