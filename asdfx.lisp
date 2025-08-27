@@ -1,8 +1,9 @@
 ;;; -*- Lisp -*-
 
+;;; Extension to ASDF to list available systems.
+
 (in-package "GEMINI")
 
-;;; Extension to ASDF to list available systems.
 (defun get-asdf-default-dirs ()
   "Returns a list of common default directories ASDF scans recursively."
   (let ((dirs '()))

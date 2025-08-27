@@ -1,5 +1,23 @@
 ;;; -*- Lisp -*-
 
+;;; Fetch the API keys.
+
+;;; We need an API key for Gemini and optionally a Custom Search
+;;; Engine API key if we want to have access to web search
+;;; capabilities.
+
+;;; The API keys can be scoped to a specific Google Cloud project.
+
+;;; The API keys can be stored in files in the user's XDG config
+;;; directory tree, or set in environment variables.
+
+;;; It costs nothing to set up a Google Cloud account and create a
+;;; project, but you will be charged for usage of the Gemini API and
+;;; custom search engine if you exceed the free tier.  The costs as of
+;;; 2025 appear to be modest (a few dollars per month) for a hobbyist.
+;;; When you sign up, you get a $300 credit for the first 90 days, so
+;;; you can judge for yourself if the costs are acceptable.
+
 (in-package "GEMINI")
 
 (defun googleapis-pathname ()

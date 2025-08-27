@@ -1,5 +1,17 @@
 ;;; -*- Lisp -*-
 
+;;; Add a LLM debugger hook for Common Lisp.  This intercepts errors
+;;; just before they get handed to the debugger, and sends the error
+;;; and the backtrace to the LLM for analysis.
+
+;;; SLIME and SLY both install their own debugger hooks, and smash the
+;;; hook on each interaction, so simply setting *DEBUGGER-HOOK* is not
+;;; going to work.  We provide a macro, CALL-WITH-LLM-DEBUGGER-HOOK,
+;;; that binds the hook around a thunk.
+
+;;; This is basically a proof of concept.  It would be better to
+;;; integrate this into SLIME or SLY.
+
 (in-package "GEMINI")
 
 (defparameter +general-debug-system-instructions+

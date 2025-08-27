@@ -31,6 +31,30 @@
          :response (schema :type :string))
         #'uiop:architecture))
 
+     (when *enable-bash*
+       (cons
+        (function-declaration
+         :name "bash"
+         :description "Run a subprogram under the bash shell."
+         :behavior :blocking
+         :parameters (schema :type :object
+                             :properties (object :command
+                                                 (schema :type :string
+                                                         :description "The subprogram to run.")
+                                                 :arguments
+                                                 (schema :type :array
+                                                         :items (schema :type :string)
+                                                         :description "The arguments to pass to the program."))
+                             :required (vector :command :arguments))
+         :response (schema :type :string
+                           :description "The standard output of the command, or an error message if the command failed."))
+        (lambda (&key command arguments)
+          (uiop:run-program
+           (cons command (coerce arguments 'list))
+           :output :string
+           :error-output :string
+           :ignore-error-status t))))
+
      (when *enable-lisp-introspection*
        (cons
         (function-declaration

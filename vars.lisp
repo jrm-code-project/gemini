@@ -32,8 +32,15 @@
     (with-open-file (out new-pathname
                          :direction :output
                          :if-exists :supersede)
-      (dolist (content (reverse context) (finish-output out))
-        (format out "~&~s~%" (cl-json:encode-json-to-string content))))
+      (let ((first? t))
+        (format out "[~%  ")
+        (dolist (entry (reverse context))
+          (unless first?
+            (format out ",~%  "))
+          (setq first? nil)
+          (cl-json:encode-json entry out))
+        (format out "~%]~%")
+        (finish-output out)))
     (when (probe-file old-pathname)
       (delete-file old-pathname))))
 
@@ -211,6 +218,9 @@
 (eval-when (:compile-toplevel :load-toplevel :execute)
   (setf (documentation '*system-instruction* 'variable) "Holds a system instruction for the model to follow."))
 
+(defparameter *enable-bash* t
+  "If true, enables the Gemini model to execute subprocesses in a bash shell.")
+
 (defparameter *enable-eval* t
   "If true, enables the Gemini model to evaluate Lisp expressions.  This is a powerful feature that should be used with caution.  Set to t to ask before evaluation, to :yolo to allow the model to evaluate any expression.  If nil, evaluation is disabled.")
 
@@ -310,6 +320,10 @@
          ,(remove
            nil
            (list*
+            (when (and (boundp '*enable-bash*) *enable-bash*)
+              (plist-hash-table
+               '(:text "You have access to a bash shell in order to run subprocesses.")))
+
             (when (and (boundp '*enable-eval*) *enable-eval*)
               (plist-hash-table
                '(:text "You have access to a Common Lisp interpreter and runtime environment in order to run programs and evaluate expressions.")))

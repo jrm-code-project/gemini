@@ -1,5 +1,10 @@
 ;;; -*- Lisp -*-
 
+;;; A replacement REPL that can evaluate Lisp forms or send free-form
+;;; text to the Gemini API.  If you type in a Lisp form, it is
+;;; evaluated, but if it cannot be read as a single Lisp form, it is
+;;; assumed to be free-form text to be sent to Gemini.
+
 (in-package "GEMINI")
 
 (defun repl-string-dispatch (input if-form if-free-form)
@@ -15,7 +20,7 @@
 
 (defun repl-eval-print-form (form)
   "Evaluates a Lisp FORM and prints the result."
-  (let ((values (multiple-value-list (eval form))))
+  (let ((values (with-llm-debugger (multiple-value-list (eval form)))))
     (setq *** **
           ** *
           * (if (null values) nil (car values))
