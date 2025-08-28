@@ -35,6 +35,16 @@
    Google APIs configuration directory."
   (merge-pathnames "default-project" (googleapis-pathname)))
 
+(defun default-blogger-apikey-pathname ()
+  "Returns the default pathname for the Google Custom Search Engine API key file
+   within the Google APIs configuration directory."
+  (merge-pathnames "blogger-apikey" (googleapis-pathname)))
+
+(defun default-blogger-blog-id-pathname ()
+  "Returns the default pathname for the Google Custom Search Engine ID file
+   within the Google APIs configuration directory."
+  (merge-pathnames "blog-id" (googleapis-pathname)))
+
 (defun default-custom-search-engine-apikey-pathname ()
   "Returns the default pathname for the Google Custom Search Engine API key file
    within the Google APIs configuration directory."
@@ -63,12 +73,31 @@
                                   :name "apikey")
                    (googleapis-pathname)))
 
+(defun project-blogger-pathname (project)
+  "Constructs the pathname for the Blogger configuration
+   directory specific to a given Google Cloud PROJECT within the
+   Google APIs configuration directory."
+  (merge-pathnames (make-pathname :directory (list :relative project "Blogger"))
+                   (googleapis-pathname)))
+
 (defun project-cse-pathname (project)
   "Constructs the pathname for the Custom Search Engine configuration
    directory specific to a given Google Cloud PROJECT within the
    Google APIs configuration directory."
   (merge-pathnames (make-pathname :directory (list :relative project "CustomSearchEngine"))
                    (googleapis-pathname)))
+
+(defun project-blogger-apikey-pathname (project)
+  "Constructs the pathname for the Blogger API key file
+   specific to a given Google Cloud PROJECT within the Google APIs
+   configuration directory."
+  (merge-pathnames (project-blogger-pathname project) "apikey"))
+
+(defun project-blogger-blog-id-pathname (project)
+  "Constructs the pathname for the Blogger API key file
+   specific to a given Google Cloud PROJECT within the Google APIs
+   configuration directory."
+  (merge-pathnames (project-blogger-pathname project) "blog-id"))
 
 (defun project-custom-search-engine-apikey-pathname (project)
   "Constructs the pathname for the Custom Search Engine API key file
@@ -92,6 +121,26 @@
           (probe-file (project-apikey-pathname project))))
       (probe-file (default-apikey-pathname))))
 
+(defun blogger-apikey-pathname ()
+  "Determines the effective pathname for the Blogger API key.
+   It first checks for a project-specific API key (if a default project
+   is set), then falls back to the default API key pathname.
+   Returns the pathname if found, otherwise NIL."
+  (or (let ((project (default-project)))
+        (when project
+          (probe-file (project-blogger-apikey-pathname project))))
+      (probe-file (default-blogger-apikey-pathname))))
+
+(defun blogger-blog-id-pathname ()
+  "Determines the effective pathname for the Blogger Blog Id key.
+   It first checks for a project-specific Blog Id (if a default project
+   is set), then falls back to the default Blog Id pathname.
+   Returns the pathname if found, otherwise NIL."
+  (or (let ((project (default-project)))
+        (when project
+          (probe-file (project-blogger-blog-id-pathname project))))
+      (probe-file (default-blogger-blog-id-pathname))))
+
 (defun custom-search-engine-apikey-pathname ()
   "Determines the effective pathname for the Google API key.
    It first checks for a project-specific API key (if a default project
@@ -111,6 +160,21 @@
         (when project
           (probe-file (project-custom-search-engine-id-pathname project))))
       (probe-file (default-custom-search-engine-id-pathname))))
+
+(defun blogger-api-key ()
+  "Retrieves the Blogger API key. It first attempts to read it from
+   the API key file (either project-specific or default), then falls back
+   to the BLOGGER_API_KEY environment variable.
+   Signals an error if no API key is found."
+  (or (let ((pathname (blogger-apikey-pathname)))
+        (and pathname
+             (with-open-file (stream pathname :direction :input)
+               (let ((line (read-line stream nil)))
+                 (when line
+                   (str:trim line))))))
+      (uiop:getenv "BLOGGER_API_KEY")
+      (error "No Blogger API key found. Set the environment variable BLOGGER_API_KEY or create a file at ~a."
+             (namestring (apikey-pathname)))))
 
 (defun google-api-key ()
   "Retrieves the Google API key. It first attempts to read it from
@@ -140,6 +204,20 @@
                    (str:trim line))))))
       (uiop:getenv "GOOGLE_CSE_API_KEY")
       (error "No Google Custom Search Engine API key found.  Set the environment variable GOOGLE_CSE_API_KEY or create file at ~a." (namestring (custom-search-engine-apikey-pathname)))))
+
+(defun blogger-blog-id ()
+  "Retrieves the Blogger blog ID. It first attempts to read it from
+   the blog ID file (either project-specific or default), then falls back
+   to the BLOG_ID environment variable.
+   Signals an error if no blog ID is found."
+  (or (let ((pathname (blogger-blog-id-pathname)))
+        (and pathname
+             (with-open-file (stream pathname :direction :input)
+               (let ((line (read-line stream nil)))
+                 (when line
+                   (str:trim line))))))
+      (uiop:getenv "BLOG_ID")
+      (error "No Blogger blog ID found.  Set the environment variable BLOG_ID or create file at ~a." (namestring (blog-id-pathname)))))
 
 (defun custom-search-engine-id ()
   "Retrieves the Google Custom Search Engine ID. It first attempts to read it from

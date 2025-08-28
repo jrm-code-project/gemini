@@ -282,7 +282,8 @@
    "a new age guru who believes in alternative anything."
    "a stand-up comedian getting a cold response."
    "a surfer dude."
-   "an ancient Greek philospher asking probing questions."
+   "an ancient Greek philosopher asking probing questions."
+   "an angry militant Black man at a poetry slam."
    "an elderly Asian grandmother with little English."
    "an emo teenager with existential angst."
    "an impatient businessman for whom time is money."
@@ -290,7 +291,8 @@
    "clinical psychiatrist Dr. Jordan Peterson."
    "conspiracy theorist Alex Jones."
    "hard-boiled noir detective Philip Marlowe."
-   "the White Rabbit late for tea."
+   "'The Captain' from *Cool Hand Luke*."
+   "the White Rabbit, late for tea."
    "verses from the King James Bible."
    ))
 
