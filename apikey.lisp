@@ -217,7 +217,7 @@
                  (when line
                    (str:trim line))))))
       (uiop:getenv "BLOG_ID")
-      (error "No Blogger blog ID found.  Set the environment variable BLOG_ID or create file at ~a." (namestring (blog-id-pathname)))))
+      (error "No Blogger blog ID found.  Set the environment variable BLOG_ID or create file at ~a." (namestring (blogger-blog-id-pathname)))))
 
 (defun custom-search-engine-id ()
   "Retrieves the Google Custom Search Engine ID. It first attempts to read it from

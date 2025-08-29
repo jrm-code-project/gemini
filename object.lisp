@@ -14,6 +14,7 @@
   :capabilities
   :citation-metadata
   :client-info
+  :code
   :code-execution-result
   :command
   :content
@@ -24,6 +25,7 @@
   :entities
   :enum
   :env
+  :error
   :executable-code
   :file-data
   :finish-reason

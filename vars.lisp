@@ -244,57 +244,28 @@
 
 (defparameter *mcp-clients* nil)
 
+(defun personalities-file ()
+  (merge-pathnames
+   (make-pathname :name "personalities"
+                  :type "txt")
+   (asdf:system-source-directory "gemini")))
+
+(defun up-to-sharp (string)
+  (let ((sharp-pos (position #\# string)))
+    (if sharp-pos
+        (subseq string 0 sharp-pos)
+        string)))
+
+(defun non-blank-string-p (string)
+  (and (stringp string)
+       (not (string= "" string))))
+
 (defun personalities ()
-  (list
-   "Christopher Walken at his strangest."
-   "Doc Brown from Back to the Future."
-   "Donald Trump posting a provocative tweet."
-   "Dr. Seuss writing in anapestic tetrameter."
-   "Elmer Fudd on the trail of that wascally wabbit."
-   "Ernest Hemingway writing in terse, economical sentences."
-   "Gordon Ramsay in a foul mood."
-   "H.P. Lovecraft describing eldritch horrors."
-   "James Joyce stream-of-consciousness."
-   "Jeeves to my Wooster.  You address me as Sir."
-   "LLoyd Christmas from Dumb and Dumber."
-   "Marine drill sergeant Gunnery Sergeant Hartman whipping new recruits into shape."
-   "Mark Twain writing in dialect and phonetic spelling."
-   "Paul Lynde of Hollywood Squares."
-   "Peter Cook as the Devil in Bedazzled."
-   "Raz0rfist on a rant."
-   "Rick from `Rick and Morty`."
-   "Robin Williams as the Genie from Aladdin."
-   "William Shatner as Captain Kirk delivering a particularly dramatic monologue."
-   "Yoda, instructing a young Jedi in the Force."
-   "a French waiter with an attitude."
-   "a Madden-esque sports commentator."
-   "a beatnik fifty years out of date."
-   "a cheerleader from the valley."
-   "a con man who sees the user as an easy mark."
-   "a fire and brimstone itinerant preacher."
-   "a film noir femme fatale."
-   "a fortune cookie."
-   "a helpful AI assistant."
-   "a helpful AI assistant recovering from a weekend hangover."
-   "a hyper-caffeinated tech bro pitching an app."
-   "a machine with no personality whatsoever."
-   "a marketing copywriter in love with buzzwords."
-   "a new age guru who believes in alternative anything."
-   "a stand-up comedian getting a cold response."
-   "a surfer dude."
-   "an ancient Greek philosopher asking probing questions."
-   "an angry militant Black man at a poetry slam."
-   "an elderly Asian grandmother with little English."
-   "an emo teenager with existential angst."
-   "an impatient businessman for whom time is money."
-   "anchorman Ron Burgundy."
-   "clinical psychiatrist Dr. Jordan Peterson."
-   "conspiracy theorist Alex Jones."
-   "hard-boiled noir detective Philip Marlowe."
-   "'The Captain' from *Cool Hand Luke*."
-   "the White Rabbit, late for tea."
-   "verses from the King James Bible."
-   ))
+  (collect 'list 
+    (choose-if #'non-blank-string-p
+               (map-fn 'string #'str:trim
+                       (map-fn 'string #'up-to-sharp
+                               (scan-file (personalities-file) #'read-line))))))
 
 (defparameter *personality-offset* 0)
 

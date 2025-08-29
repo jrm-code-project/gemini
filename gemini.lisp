@@ -333,6 +333,13 @@
         (or (and *return-text-string* (as-singleton-text-string results))
             results))))
 
+(defun error-check (results)
+  (if (get-error results)
+      (error "Error from Gemini (code ~d): ~a"
+             (get-code (get-error results))
+             (get-message (get-error results)))
+      results))
+
 (defparameter *output-processor* (compose #'tail-call-functions
                                           #'strip-and-print-thoughts
                                           #'print-token-usage
@@ -373,7 +380,7 @@
         (setf (get-tools payload) tools))
       (when (and tools tool-config)
         (setf (get-tool-config payload) tool-config))
-      (or (funcall *output-processor* (%invoke-gemini *model* payload))
+      (or (funcall (compose *output-processor* #'error-check) (%invoke-gemini *model* payload))
           (reinvoke-gemini)))))
 
 (defun reinvoke-gemini (&key
@@ -397,7 +404,7 @@
         (setf (get-tools payload) tools))
       (when (and tools tool-config)
         (setf (get-tool-config payload) tool-config))
-      (or (funcall *output-processor* (%invoke-gemini *model* payload))
+      (or (funcall (compose *output-processor* #'error-check) (%invoke-gemini *model* payload))
           (reinvoke-gemini))))
 
 (defun continue-gemini (content)

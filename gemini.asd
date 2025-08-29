@@ -22,7 +22,7 @@
                (:file "asdfx"     :depends-on ("package"))
                (:file "blogger"   :depends-on ("gemini" "json" "package" "vars"))
                (:file "debug"     :depends-on ("gemini" "misc" "object" "package" "vars"))
-               (:file "functions" :depends-on ("asdfx" "misc" "mcp" "package" "object"))
+               (:file "functions" :depends-on ("asdfx" "mcp" "misc" "package" "object"))
                (:file "gemini"    :depends-on ("apikey" "functions" "json" "mcp" "misc" "object" "package" "vars"))
                (:file "json"      :depends-on ("package"))
                (:file "jsonrpc"   :depends-on ("json" "misc" "object" "package"))
