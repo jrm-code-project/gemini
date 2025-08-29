@@ -274,7 +274,15 @@
         *personality-offset* (random (length (personalities)))))
 
 (defun todays-personality ()
-  (elt (personalities) (mod (+ (absolute-day) *personality-offset*) (length (personalities)))))
+  (multiple-value-bind (sec min hour day mon year dow dst tz)
+      (decode-universal-time (get-universal-time))
+    (declare (ignore sec min hour year dow dst tz))
+    (cond ((and (= mon 9) (= day 19)) "a pirate. Arrr!")
+          ((and (= mon 10) (= day 31)) "an Edward Gorey character.")
+          ((and (= mon 11) (= day 11)) "a World War I soldier.")
+          ((and (= mon 12) (= day 25)) "the ghost of Christmas Past."))
+          (t
+           (elt (personalities) (mod (+ (absolute-day) *personality-offset*) (length (personalities)))))))
 
 (defun call-without-personality (thunk)
   (let ((*enable-personality* nil))
