@@ -113,12 +113,18 @@
          :response (schema :type :string
                            :description "The printed representation of the result of evaluating the expression, or an error message if the expression cannot be evaluated."))
         (lambda (&key string)
+          ;; (terpri)
+          ;; (write-string "Expression follows:")
+          ;; (terpri)
+          ;; (write-string string)
+          ;; (terpri)
+          ;; (finish-output)
           (handler-case
               (let* ((narrow-string (str:trim string))
                      (length (length narrow-string)))
                 (if (or (eq *enable-eval* :yolo)
-                        (yes-or-no-p (format nil "Do you really want to evaluate ~s?" narrow-string)))
-                    (multiple-value-bind (form count) (read-from-string (str:trim string))
+                        (yes-or-no-p "Do you really want to evaluate ~a?" narrow-string))
+                    (multiple-value-bind (form count) (read-from-string narrow-string)
                       (if (= count length)
                           (progn
                             (format *trace-output* "~&;; Evaluating: ~s~%" form)

@@ -291,6 +291,28 @@
 (defmacro without-personality (&body body)
   `(CALL-WITHOUT-PERSONALITY (LAMBDA () ,@body)))
 
+(defun read-system-instruction (filename)
+  (plist-hash-table
+   `(:text ,(str:join #\newline
+                      (collect 'list
+                        (scan-file (merge-pathnames
+                                    (make-pathname :name filename
+                                                   :type "md")
+                                    (asdf:system-source-directory "gemini"))
+                                   #'read-line))))))
+
+(defun bash-system-instruction ()
+  (read-system-instruction "bash-system-instruction"))
+
+(defun lisp-system-instruction ()
+  (read-system-instruction "lisp-system-instruction"))
+
+(defun web-system-instruction ()
+  (read-system-instruction "web-system-instruction"))
+
+(defun search-system-instruction ()
+  (read-system-instruction "search-system-instruction"))
+
 (defun default-system-instruction ()
   "Returns the value of *SYSTEM-INSTRUCTION* if it is bound, otherwise NIL.
    Provides a default system instruction for generation."
@@ -302,12 +324,10 @@
            nil
            (list*
             (when (and (boundp '*enable-bash*) *enable-bash*)
-              (plist-hash-table
-               '(:text "You have access to a bash shell in order to run subprocesses.")))
+              (bash-system-instruction))
 
             (when (and (boundp '*enable-eval*) *enable-eval*)
-              (plist-hash-table
-               '(:text "You have access to a Common Lisp interpreter and runtime environment in order to run programs and evaluate expressions.")))
+              (lisp-system-instruction))
 
             (if (and (boundp '*enable-personality*) *enable-personality*)
                 (plist-hash-table
@@ -316,12 +336,10 @@
                  '(:text "You are a helpful AI assistant.  Answer in a neutral, professional tone.")))
 
             (when (and (boundp '*enable-web-functions*) *enable-web-functions*)
-              (plist-hash-table
-               '(:text "You have access to HTTP functions such as GET and POST.")))
+              (web-system-instruction))
 
             (when (and (boundp '*enable-web-search*) *enable-web-search*)
-              (plist-hash-table
-               '(:text "You have access to the Google search engine for web searches.")))
+              (search-system-instruction))
 
             (map 'list (lambda (mcp-client)
                          (when (get-system-instruction mcp-client)

@@ -9,6 +9,7 @@
                "chanl"
                "cl-base64"
                "cl-json"
+               "cl-ppcre"
                "dexador"
                "fold"
                "function"
