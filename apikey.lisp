@@ -55,6 +55,11 @@
    within the Google APIs configuration directory."
   (merge-pathnames "cse-id" (googleapis-pathname)))
 
+(defun default-hyperspec-custom-search-engine-id-pathname ()
+  "Returns the default pathname for the Google Custom Search Engine ID file
+   within the Google APIs configuration directory."
+  (merge-pathnames "hyperspec-id" (googleapis-pathname)))
+
 (defun default-project ()
   "Reads and returns the default Google Cloud project name from its
    designated configuration file. Returns NIL if the file does not exist
@@ -111,6 +116,12 @@
    configuration directory."
   (merge-pathnames (project-cse-pathname project) "id"))
 
+(defun project-hyperspec-custom-search-engine-id-pathname (project)
+  "Constructs the pathname for the Hyperspec Search Engine ID file
+   specific to a given Google Cloud PROJECT within the Google APIs
+   configuration directory."
+  (merge-pathnames (project-cse-pathname project) "hyperspec-id"))
+
 (defun apikey-pathname ()
   "Determines the effective pathname for the Google API key.
    It first checks for a project-specific API key (if a default project
@@ -160,6 +171,16 @@
         (when project
           (probe-file (project-custom-search-engine-id-pathname project))))
       (probe-file (default-custom-search-engine-id-pathname))))
+
+(defun hyperspec-custom-search-engine-id-pathname ()
+  "Determines the effective pathname for the Hyperspec Custom Search Engine ID.
+   It first checks for a project-specific ID (if a default project
+   is set), then falls back to the default ID pathname.
+   Returns the pathname if found, otherwise NIL."
+  (or (let ((project (default-project)))
+        (when project
+          (probe-file (project-hyperspec-custom-search-engine-id-pathname project))))
+      (probe-file (default-hyperspec-custom-search-engine-id-pathname))))
 
 (defun blogger-api-key ()
   "Retrieves the Blogger API key. It first attempts to read it from
@@ -232,3 +253,17 @@
                    (str:trim line))))))
       (uiop:getenv "GOOGLE_CSE_ID")
       (error "No Google Custom Search Engine ID found.  Set the environment variable GOOGLE_CSE_ID or cerate file at ~a." (namestring (custom-search-engine-id-pathname)))))
+
+(defun hyperspec-search-engine-id ()
+  "Retrieves the Google Custom Search Engine ID. It first attempts to read it from
+   the Hyperspec CSE ID file (either project-specific or default), then falls back
+   to the HYPERSPEC_CSE_ID environment variable.
+   Signals an error if no Hyperspec CSE ID is found."
+  (or (let ((pathname (hyperspec-custom-search-engine-id-pathname)))
+        (and pathname
+             (with-open-file (stream pathname :direction :input)
+               (let ((line (read-line stream nil)))
+                 (when line
+                   (str:trim line))))))
+      (uiop:getenv "HYPERSPEC_CSE_ID")
+      (error "No Hyperspec Custom Search Engine ID found.  Set the environment variable HYPERSPEC_CSE_ID or cerate file at ~a." (namestring (hyperspec-custom-search-engine-id-pathname)))))

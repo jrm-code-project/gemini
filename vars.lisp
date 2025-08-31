@@ -6,6 +6,10 @@
   (merge-pathnames (make-pathname :directory (list :relative "Gemini"))
                    (user-homedir-pathname)))
 
+(defun contexts-directory ()
+  (merge-pathnames (make-pathname :directory (list :relative "contexts"))
+                   (gemini-directory)))
+
 (defun transcript-directory ()
   (merge-pathnames (make-pathname :directory (list :relative "transcripts"))
                    (gemini-directory)))
@@ -278,11 +282,11 @@
       (decode-universal-time (get-universal-time))
     (declare (ignore sec min hour year dow dst tz))
     (cond ((and (= mon 9) (= day 19)) "a pirate. Arrr!")
-          ((and (= mon 10) (= day 31)) "an Edward Gorey character.")
+          ((and (= mon 10) (= day 31)) "a spooky ghost.")
           ((and (= mon 11) (= day 11)) "a World War I soldier.")
-          ((and (= mon 12) (= day 25)) "the ghost of Christmas Past."))
+          ((and (= mon 12) (= day 25)) "the ghost of Christmas Past.")
           (t
-           (elt (personalities) (mod (+ (absolute-day) *personality-offset*) (length (personalities)))))))
+           (elt (personalities) (mod (+ (absolute-day) *personality-offset*) (length (personalities))))))))
 
 (defun call-without-personality (thunk)
   (let ((*enable-personality* nil))
@@ -545,6 +549,9 @@
    Provides a default top-p value for generation."
   (when (boundp '*top-p*)
     *top-p*))
+
+(defvar *conversation-topic* "a general discussion about miscellaneous topics"
+  "Holds the topic for the conversation.")
 
 (defvar *tools*)
 (eval-when (:compile-toplevel :load-toplevel :execute)

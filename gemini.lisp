@@ -196,25 +196,36 @@
                                       ((not (functionp handler))
                                        (object :error (format nil "Handler for `~s` is not a function." name)
                                                 ))
-                                      (t (object :result (apply handler arglist)
-                                                  )))
-                      )
-                     )
-            ))
+                                      (t (handler-case
+                                             (let ((answers (multiple-value-list (apply handler arglist))))
+                                               (if (consp answers)
+                                                   (if (consp (cdr answers))
+                                                       (object :result (car answers)
+                                                               :additional-results (coerce (cdr answers) 'vector))
+                                                       (object :result (car answers)))
+                                                   (object :result +json-null+)))
+                                           (error (e)
+                                             (object :error (format nil "~a" e))))))))))
       ;; (format *trace-output* "~&;; Function call response: ~s~%" (dehashify response))
       response)))
+
+(defvar *accumulated-tokens* 0
+  "Accumulated token count across multiple API calls.")
 
 (defun process-usage-metadata (usage-metadata)
   "Processes usage metadata from the API response.
    Outputs the usage information to *trace-output*."
-  (format *trace-output* "~&;; Prompt Tokens:    ~7,' d~%~
-                            ;; Thoughts Tokens:  ~7,' d~%~
-                            ;; Candidate Tokens: ~7,' d~%~
-                            ;; Total Tokens:     ~7,' d~%"
+  (incf *accumulated-tokens* (get-total-token-count usage-metadata))
+  (format *trace-output* "~&;; Prompt Tokens:      ~10,' d~%~
+                            ;; Thoughts Tokens:    ~10,' d~%~
+                            ;; Candidate Tokens:   ~10,' d~%~
+                            ;; Total Tokens:       ~10,' d~%~
+                            ;; Accumulated Tokens: ~10,' d~%"
           (get-prompt-token-count usage-metadata)
           (or (get-thoughts-token-count usage-metadata) 0)
           (or (get-candidates-token-count usage-metadata) 0)
-          (get-total-token-count usage-metadata)))
+          (get-total-token-count usage-metadata)
+          *accumulated-tokens*))
 
 (defun ->prompt (thing)
   "Converts a thing into a list of content objects."
@@ -228,14 +239,26 @@
         (t (error "Unrecognized type for prompt: ~s" thing))))
   
 (defun extend-conversation (new-content)
-  ;;(format *trace-output* "Extending conversion with new content: ~s~%" (dehashify new-content))
-  (let* ((candidates (get-candidates new-content))
-         (candidate (svref candidates 0))
-         (content (get-content candidate)))
-    (push content *context*)
-    (setq *prior-context* *context*)
-    (save-transcript *context*)
-    new-content))
+  (push new-content *context*)
+  (setq *prior-context* *context*)
+  (save-transcript *context*)
+  new-content)
+
+(defun extend-conversation-with-first-candidate (results)
+  "Extends the conversation context with the first candidate from the results.
+   Returns the results unchanged."
+  (let ((candidates (get-candidates results)))
+    (when candidates
+      (let ((first-candidate (if (consp candidates)
+                                 (car candidates)
+                                 (and (vectorp candidates)
+                                      (> (length candidates) 0)
+                                      (svref candidates 0)))))
+        (when first-candidate
+          (let ((content (get-content first-candidate)))
+            (when content
+              (extend-conversation content)))))))
+  results)
 
 (defun print-token-usage (results)
   "Prints the token usage information from the results.
@@ -343,12 +366,13 @@
 (defparameter *output-processor* (compose #'tail-call-functions
                                           #'strip-and-print-thoughts
                                           #'print-token-usage
-                                          #'extend-conversation)
+                                          #'extend-conversation-with-first-candidate)
   "The default output processor for the Gemini API.")
 
 (defun current-context ()
   (if (null *context*)
-      (list (content :parts (list (part (format nil "The following is conversation #~d." (get-universal-time))))
+      (list (content :parts (list (part (format nil "**The following is conversation #~d.**" (get-universal-time)))
+                                  (part (format nil "**The topic of conversation is ~a.**" *conversation-topic*)))
                      :role "model"))
       *context*))
 

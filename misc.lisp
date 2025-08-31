@@ -377,9 +377,9 @@
   (sort (remove-duplicates (mappend #'external-variables (filter-package-list)))
         #'string< :key #'symbol-name))
 
-(defun web-search (query)
+(defun custom-search (query &key custom-search-engine-id)
   (let ((response (dex:get (format nil "https://www.googleapis.com/customsearch/v1?cx=~a&q=~a"
-                                   (custom-search-engine-id)
+                                   custom-search-engine-id
                                    query)
                            :headers `(("x-goog-api-key". ,(custom-search-engine-api-key))))))
     (if (stringp response)
@@ -388,3 +388,9 @@
         (with-decoder-jrm-semantics
           (cl-json:decode-json-from-string
            (flex:octets-to-string response :external-format :utf-8))))))
+
+(defun web-search (query)
+  (custom-search query :custom-search-engine-id (custom-search-engine-id)))
+
+(defun hyperspec-search (query)
+  (custom-search query :custom-search-engine-id (hyperspec-search-engine-id)))
