@@ -182,7 +182,7 @@
              (symbolp thing)
              (stringp thing)
              (numberp thing)
-             (typep thing 'json-boolean))
+             (typep thing 'jsonx:json-boolean))
          thing)
         ((hash-table-p thing)
          (let* ((alist (hash-table-alist thing))

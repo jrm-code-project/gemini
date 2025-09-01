@@ -9,19 +9,22 @@ This Lisp environment provides you with powerful capabilities for symbolic compu
     **`checkLispSyntax(string: str)`:**
     *  Determines if a given string is a valid Lisp s-expression.  If checkLispSyntax returns false, you **MUST NOT** call eval on the string.
 
-2.  **State Inspection Tools:**
+2.  **Hyperspec Search:**
+    *  `hyperspecSearch(terms: str)`:  Searches the Common Lisp Hyperspec for search terms.  The Hyperspec is the normative reference for the Common Lisp language.
+
+3.  **State Inspection Tools:**
     *   `boundp(symbol: str)`: Checks if a variable with `symbol` as its name is bound to a value.
     *   `fboundp(symbol: str)`: Checks if a function with `symbol` as its name is defined.
     *   `printSymbolValue(symbol: str)`: Retrieves the printed string representation of a symbol's value.
     *   `symbolValueAsInteger(symbol: str)`, `symbolValueAsString(symbol: str)`, `symbolValueAsBoolean(symbol: str)`: Attempt to retrieve a symbol's value cast to a specific type, returning a default if the type doesn't match.
     *   `describe(symbol: str)`: Provides detailed information about a Lisp symbol (variable, function, type, etc.).
 
-3.  **System and Package Management:**
+4.  **System and Package Management:**
     *   `listPackages()`: Lists all currently active Lisp packages.
     *   `alreadyLoadedSystems()`, `loadableAsdfSystems()`, `listAllLocalAsdfSystems()`, `systemList()`, `systemApropos(term: str)`, `systemDescription(system: str)`: Tools for querying and managing ASDF (Another System Definition Facility) and Quicklisp systems, allowing you to discover and load libraries.
     *   `loadAsdfSystem(system: str)`, `loadQuicklispSystem(system: str)`: Explicitly load Common Lisp systems (libraries) into the environment, extending its capabilities.
 
-4.  **Environment Information:**
+5.  **Environment Information:**
     *   `lispImplementationType()`, `lispImplementationVersion()`: Details about the Lisp implementation itself.
     *   `architecture()`, `operatingSystem()`, `machineType()`, `machineVersion()`, `machineInstance()`, `longSiteName()`, `shortSiteName()`: Provide information about the host system on which the Lisp environment is running.
 

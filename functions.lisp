@@ -96,9 +96,9 @@ This `bash` access empowers you to perform a wide array of system-level operatio
                 (multiple-value-bind (form count) (read-from-string narrow-string)
                   (declare (ignore form))
                   (if (= count length)
-                      +json-true+
-                      +json-false+)))
-            (error () +json-false+)))))
+                      jsonx:+json-true+
+                      jsonx:+json-false+)))
+            (error () jsonx:+json-false+)))))
 
      (when *enable-lisp-introspection*
        (cons
@@ -194,8 +194,8 @@ This `bash` access empowers you to perform a wide array of system-level operatio
                          (boundp sym))
                     (and (not sym)
                          (string-equal name "NIL")))
-                +json-true+
-                +json-false+)))))
+                jsonx:+json-true+
+                jsonx:+json-false+)))))
 
      (when *enable-lisp-introspection*
        (cons
@@ -213,8 +213,8 @@ This `bash` access empowers you to perform a wide array of system-level operatio
           (let ((sym (find-symbol (string-upcase symbol))))
             (if (and sym
                      (fboundp sym))
-                +json-true+
-                +json-false+)))))
+                jsonx:+json-true+
+                jsonx:+json-false+)))))
 
      (when *enable-lisp-introspection*
        (cons
@@ -234,13 +234,13 @@ This `bash` access empowers you to perform a wide array of system-level operatio
                      (boundp sym))
                 (if (or (eq (symbol-value sym) 't)
                         (eq (symbol-value sym) 'nil))
-                    +json-true+
-                    +json-false+)
-                +json-false+)))))
+                    jsonx:+json-true+
+                    jsonx:+json-false+)
+                jsonx:+json-false+)))))
 
      (when (and *enable-web-search*
-                (hyperspec-search-engine-id)
-                (custom-search-engine-api-key))
+                (google:hyperspec-search-engine-id)
+                (google:search-engine-api-key))
        (cons
         (function-declaration
          :name "hyperspecSearch"
@@ -271,7 +271,7 @@ This `bash` access empowers you to perform a wide array of system-level operatio
                                        :snippet (get-snippet item))
                                )
                        (get-items
-                        (hyperspec-search
+                        (google:hyperspec-search
                          (str:join "+" (str:split " " search-terms :omit-nulls t)))))))))
 
      (when *enable-lisp-introspection*
@@ -291,8 +291,8 @@ This `bash` access empowers you to perform a wide array of system-level operatio
             (if (and sym
                      (boundp sym)
                      (integerp (symbol-value sym)))
-                +json-true+
-                +json-false+)))))
+                jsonx:+json-true+
+                jsonx:+json-false+)))))
 
      (when *enable-lisp-introspection*
        (cons
@@ -311,8 +311,8 @@ This `bash` access empowers you to perform a wide array of system-level operatio
             (if (and sym
                      (boundp sym)
                      (stringp (symbol-value sym)))
-                +json-true+
-                +json-false+)))))
+                jsonx:+json-true+
+                jsonx:+json-false+)))))
 
      (when *enable-lisp-introspection*
        (cons
@@ -577,8 +577,8 @@ This `bash` access empowers you to perform a wide array of system-level operatio
         (lambda (&key symbol)
           (let ((sym (find-symbol (string-upcase symbol))))
             (if (and sym (boundp sym) (symbol-value sym))
-                +json-true+
-                +json-false+)))))
+                jsonx:+json-true+
+                jsonx:+json-false+)))))
 
      (when *enable-lisp-introspection*
        (cons
@@ -668,8 +668,8 @@ This `bash` access empowers you to perform a wide array of system-level operatio
           (mapcar #'ql-dist:name (ql:system-list)))))
 
      (when (and *enable-web-search*
-                (custom-search-engine-id)
-                (custom-search-engine-api-key))
+                (google:google-search-engine-id)
+                (google:search-engine-api-key))
        (cons
         (function-declaration
          :name "webSearch"
@@ -700,7 +700,7 @@ This `bash` access empowers you to perform a wide array of system-level operatio
                                        :snippet (get-snippet item))
                                )
                        (get-items
-                        (web-search
+                        (google:web-search
                          (str:join "+" (str:split " " search-terms :omit-nulls t)))))))))
 
      (when *enable-interaction*
@@ -718,8 +718,8 @@ This `bash` access empowers you to perform a wide array of system-level operatio
                            :description "Returns true or false based on user input."))
         (lambda (&key question)
           (if (yes-or-no-p question)
-              +json-true+
-              +json-false+))))
+              jsonx:+json-true+
+              jsonx:+json-false+))))
 
      (when *enable-interaction*
        (cons
@@ -736,8 +736,8 @@ This `bash` access empowers you to perform a wide array of system-level operatio
                            :description "Returns true or false based on user input."))
         (lambda (&key question)
           (if (y-or-n-p question)
-              +json-true+
-              +json-false+))))
+              jsonx:+json-true+
+              jsonx:+json-false+))))
      ))))
 
 (defun mcp-functions-and-handlers ()

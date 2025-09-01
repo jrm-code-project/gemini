@@ -184,7 +184,7 @@
 (defun initialize-mcp-client! (mcp-client)
   (let* ((client-initialization-info
            (object :capabilities (object :elicitation (object)
-                                         :roots (object :list-changed +json-true+)
+                                         :roots (object :list-changed jsonx:+json-true+)
                                          :sampling (object))
                    :client-info (object :display-name "SBCL Gemini Client"
                                         :name "SBCLGeminiClient"
@@ -368,7 +368,7 @@
            "tools/call" (object :_meta (object :progress-token (format nil "~aProgress" (get-name tool)) )
                                 :name (get-name tool)
                                 :arguments (or params
-                                               +json-empty-object+)
+                                               jsonx:+json-empty-object+)
                                 )))
 
 (defun test-tools ()

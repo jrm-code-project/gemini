@@ -14,16 +14,10 @@
   "Invokes the Gemini API with the specified MODEL-ID and PAYLOAD.
    Returns the response from the API as a decoded JSON object.
    This is an internal helper function."
-  (let ((response (dex:post (concatenate 'string +gemini-api-base-url+ model-id ":generateContent")
-                            :headers `(("Content-Type" . "application/json")
-                                       ("x-goog-api-key" . ,(google-api-key)))
-                            :content (cl-json:encode-json-to-string payload))))
-    (if (stringp response)
-        (with-decoder-jrm-semantics
-          (cl-json:decode-json-from-string response))
-        (with-decoder-jrm-semantics
-          (cl-json:decode-json-from-string
-           (flex:octets-to-string response :external-format :utf-8))))))
+  (google:google-post
+   (concatenate 'string +gemini-api-base-url+ model-id ":generateContent")
+   (google:gemini-api-key)
+   payload))
 
 (defun get-handler (name function-and-handler-list)
   (cdr (assoc name function-and-handler-list :test #'equal :key #'get-name)))
@@ -203,7 +197,7 @@
                                                        (object :result (car answers)
                                                                :additional-results (coerce (cdr answers) 'vector))
                                                        (object :result (car answers)))
-                                                   (object :result +json-null+)))
+                                                   (object :result jsonx:+json-null+)))
                                            (error (e)
                                              (object :error (format nil "~a" e))))))))))
       ;; (format *trace-output* "~&;; Function call response: ~s~%" (dehashify response))
