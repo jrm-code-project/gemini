@@ -14,10 +14,17 @@
   "Invokes the Gemini API with the specified MODEL-ID and PAYLOAD.
    Returns the response from the API as a decoded JSON object.
    This is an internal helper function."
-  (google:google-post
-   (concatenate 'string +gemini-api-base-url+ model-id ":generateContent")
-   (google:gemini-api-key)
-   payload))
+  (let ((start-time (local-time:now))
+        (aborted t))
+    (unwind-protect
+         (prog1 (google:google-post
+                 (concatenate 'string +gemini-api-base-url+ model-id ":generateContent")
+                 (google:gemini-api-key)
+                 payload)
+           (setq aborted nil))
+      (let ((elapsed-time (local-time:timestamp-difference (local-time:now) start-time)))
+        (format *trace-output* "~&;; Gemini API ~:[finished in~;aborted after~] ~a seconds.~%" aborted
+                elapsed-time)))))
 
 (defun get-handler (name function-and-handler-list)
   (cdr (assoc name function-and-handler-list :test #'equal :key #'get-name)))
@@ -212,11 +219,11 @@
   (incf *accumulated-prompt-tokens* (get-prompt-token-count usage-metadata))
   (incf *accumulated-response-tokens* (or (get-thoughts-token-count usage-metadata) 0))
   (incf *accumulated-response-tokens* (or (get-candidates-token-count usage-metadata) 0))
-  (format *trace-output* "~&;; Prompt Tokens:      ~7,' d~%~
-                            ;; Thoughts Tokens:    ~7,' d~%~
-                            ;; Candidate Tokens:   ~7,' d~%~
-                            ;; Accumulated Prompt Tokens:   ~10,' d~%~
-                            ;; Accumulated Response Tokens: ~10,' d~%"
+  (format *trace-output* "~&;; Prompt Tokens:      ~9,' :d~%~
+                            ;; Thoughts Tokens:    ~9,' :d~%~
+                            ;; Candidate Tokens:   ~9,' :d~%~
+                            ;; Accumulated Prompt Tokens:   ~12,' :d~%~
+                            ;; Accumulated Response Tokens: ~12,' :d~%"
           (get-prompt-token-count usage-metadata)
           (or (get-thoughts-token-count usage-metadata) 0)
           (or (get-candidates-token-count usage-metadata) 0)
