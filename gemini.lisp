@@ -125,10 +125,8 @@
 (defun process-thought (thought)
   "Processes a thought part object.
    If the thought is a text part, it formats the text and outputs it to *trace-output*."
-  (format *trace-output* "~&~a~%"
-          (reflow-comment
-           (mapcar #'str:trim
-                   (str:split #\newline (get-text thought))))))
+  (format *trace-output* "~&~{;; ~a~%~}"
+          (mappend #'reflow-line (str:split #\newline (get-text thought)))))
 
 (defun process-thoughts (thoughts)
   "Processes a list of thought part objects.
@@ -203,23 +201,27 @@
       ;; (format *trace-output* "~&;; Function call response: ~s~%" (dehashify response))
       response)))
 
-(defvar *accumulated-tokens* 0
-  "Accumulated token count across multiple API calls.")
+(defvar *accumulated-prompt-tokens* 0
+  "Accumulated prompt token count across multiple API calls.")
+(defvar *accumulated-response-tokens* 0
+  "Accumulated response token count across multiple API calls.")
 
 (defun process-usage-metadata (usage-metadata)
   "Processes usage metadata from the API response.
    Outputs the usage information to *trace-output*."
-  (incf *accumulated-tokens* (get-total-token-count usage-metadata))
-  (format *trace-output* "~&;; Prompt Tokens:      ~10,' d~%~
-                            ;; Thoughts Tokens:    ~10,' d~%~
-                            ;; Candidate Tokens:   ~10,' d~%~
-                            ;; Total Tokens:       ~10,' d~%~
-                            ;; Accumulated Tokens: ~10,' d~%"
+  (incf *accumulated-prompt-tokens* (get-prompt-token-count usage-metadata))
+  (incf *accumulated-response-tokens* (or (get-thoughts-token-count usage-metadata) 0))
+  (incf *accumulated-response-tokens* (or (get-candidates-token-count usage-metadata) 0))
+  (format *trace-output* "~&;; Prompt Tokens:      ~7,' d~%~
+                            ;; Thoughts Tokens:    ~7,' d~%~
+                            ;; Candidate Tokens:   ~7,' d~%~
+                            ;; Accumulated Prompt Tokens:   ~10,' d~%~
+                            ;; Accumulated Response Tokens: ~10,' d~%"
           (get-prompt-token-count usage-metadata)
           (or (get-thoughts-token-count usage-metadata) 0)
           (or (get-candidates-token-count usage-metadata) 0)
-          (get-total-token-count usage-metadata)
-          *accumulated-tokens*))
+          *accumulated-prompt-tokens*
+          *accumulated-response-tokens*))
 
 (defun ->prompt (thing)
   "Converts a thing into a list of content objects."

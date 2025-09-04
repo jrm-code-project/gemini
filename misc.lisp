@@ -9,57 +9,39 @@
 (defun seconds-per-day ()
   (* (seconds-per-minute) (minutes-per-day)))
 (defun absolute-day ()
+  "Return the day since the start of the epoch (UTC)."
   (floor (get-universal-time) (seconds-per-day)))
 
+;; Coerce to T or NIL
 (defun ->boolean (thing)
-  (if (null thing)
-      nil
-      t))
+  (if thing
+      t
+      nil))
+
+(defun string->word-list (string)
+  (str:split #\Space (str:trim string) :omit-nulls t))
+
+(defun strings->word-list (strings)
+  (mappend #'string->word-list strings))
 
 (defun deflow (string)
   "Removes newlines from STRING and replaces them with spaces, ensuring that the result is a single line."
-  (let ((lines
-          (remove-if (lambda (line) (zerop (length line)))
-                     (map 'list #'str:trim (str:split #\newline string)))))
-    (and lines 
-         (str:join #\Space lines))))
+  (str:join #\Space 
+            (remove-if (lambda (line) (zerop (length line)))
+                       (map 'list #'str:trim (str:split #\newline string :omit-nulls t)))))
 
-(defun reflow-comment (lines)
-  "Reflow a list of lines into a single string."
-  (let iter ((lines lines)
-             (words nil)
-             (new-line ";;")
-             (answer ""))
-    (cond ((> (length new-line) 80)
-           (iter lines words ";;" (concatenate 'string answer new-line "
-")))
-          ((null words)
-           (cond ((null lines) (concatenate 'string answer new-line))
-                 ((zerop (length (car lines)))
-                  (iter (cdr lines) nil ";;" (concatenate 'string answer new-line "
-")))
-                 (t
-                  (iter (cdr lines) (str:split #\Space (car lines)) ";;" (concatenate 'string answer new-line "
-")))))
-          (t (iter lines (cdr words) (if (zerop (length new-line))
-                                         (car words)
-                                         (concatenate 'string new-line " " (car words)))
-                   answer)))))
+(defconstant +line-length-limit+ 80)
 
-(defun dehashify (object)
-  (cond ((hash-table-p object)
-         (mapcar #'dehashify (hash-table-alist object)))
-        ((consp object)
-         (let ((dehashed-car (dehashify (car object)))
-               (dehashed-cdr (dehashify (cdr object))))
-           (if (and (eq dehashed-car (car object))
-                    (eq dehashed-cdr (cdr object)))
-               object
-               (cons dehashed-car dehashed-cdr))))
-        ((stringp object) object)
-        ((vectorp object)
-         (map 'vector #'dehashify object))
-        (t object)))
+(defun reflow-line (line)
+  "Reflow a single line to a list of lines, each no longer than 80 characters."
+  (if (<= (length line) +line-length-limit+)
+      (list line)
+      (let ((space-pos (or (position #\Space line :from-end t :end (1+ +line-length-limit+))
+                           (position #\Space line :start (1+ +line-length-limit+)))))
+        (if (null space-pos)
+            (list line)
+            (cons (subseq line 0 space-pos)
+                  (reflow-line (subseq line (min (1+ space-pos) (length line)))))))))
 
 (defun key? (thing)
   "Checks if THING is a valid key (either a keyword or a string)."
@@ -160,7 +142,7 @@
 
 (defun list-of-test (predicate)
   "Returns a predicate that checks if THING is a list where all elements
-   satisfy the provided PREDICATE."
+   satisfy the provided PREDICATE.  An empty list is NOT considered valid."
   (lambda (thing)
     (and (consp thing)
          (every predicate thing))))
@@ -177,7 +159,8 @@
              (funcall predicate (svref thing 0))))))
 
 (defmacro define-field (name getter)
-  "Define a GET-<name> and (SETF GET-<name>) generic function."
+  "Define a GET-<name> and (SETF GET-<name>) generic function.
+Does not add values to ALISTS."
   `(PROGN
      (DEFGENERIC ,getter (OBJECT)
        (:DOCUMENTATION ,(format nil "Retrieves the '~a' field from an object." name))
@@ -216,7 +199,7 @@
    in an alist or hash table. If the key is not found, it returns NIL."
   (let ((symbol (find-symbol (format nil "GET-~A" (string-upcase (symbol-name keyword))) (find-package "GEMINI"))))
     (if (and symbol (fboundp symbol))
-        symbol
+        (symbol-function symbol)
         (lambda (object)
           (if (hash-table-p object)
               (gethash keyword object)
@@ -376,4 +359,3 @@
   "Return a list of top-level functions defined anywhere."
   (sort (remove-duplicates (mappend #'external-variables (filter-package-list)))
         #'string< :key #'symbol-name))
-
