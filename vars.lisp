@@ -317,6 +317,23 @@
 (defun search-system-instruction ()
   (read-system-instruction "search-system-instruction"))
 
+(defun mcp-system-instruction ()
+  (plist-hash-table
+   `(:text ,(str:join #\newline
+                      (list*
+                       "### MCP Clients Available"
+                       ""
+                       (map 'list (lambda (client)
+                                    (format nil "## ~a~%~a~%~%~{~a~%~}"
+                                            (get-name client)
+                                            (car (get-system-instruction client))
+                                            (map 'list (lambda (tool)
+                                                         (format nil "~&# ~a~%~a~%"
+                                                                 (get-name tool)
+                                                                 (get-description tool)))
+                                                 (get-tools client))))
+                            *mcp-clients*))))))
+
 (defun default-system-instruction ()
   "Returns the value of *SYSTEM-INSTRUCTION* if it is bound, otherwise NIL.
    Provides a default system instruction for generation."
@@ -326,7 +343,7 @@
        `(:parts
          ,(remove
            nil
-           (list*
+           (list
             (when (and (boundp '*enable-bash*) *enable-bash*)
               (bash-system-instruction))
 
@@ -345,11 +362,8 @@
             (when (and (boundp '*enable-web-search*) *enable-web-search*)
               (search-system-instruction))
 
-            (map 'list (lambda (mcp-client)
-                         (when (get-system-instruction mcp-client)
-                           (plist-hash-table
-                            `(:text . ,(get-system-instruction mcp-client)))))
-                 *mcp-clients*)))
+            (when (and (boundp '*mcp-clients*) *mcp-clients*)
+              (mcp-system-instruction))))
          :role "system"))))
 
 (defvar *tool-config*)

@@ -2,7 +2,10 @@
 
 (in-package "GEMINI")
 
-(defconstant +fence+ "```")
+(defconstant +fence+
+  (if (boundp '+fence+)
+      (symbol-value '+fence+)
+      "```"))
 
 (defun fence-start (language)
   (declare (optimizable-series-function))
