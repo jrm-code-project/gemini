@@ -228,6 +228,9 @@
 (defparameter *enable-eval* t
   "If true, enables the Gemini model to evaluate Lisp expressions.  This is a powerful feature that should be used with caution.  Set to t to ask before evaluation, to :yolo to allow the model to evaluate any expression.  If nil, evaluation is disabled.")
 
+(defparameter *enable-file-system* t
+  "If true, enables the Gemini model to read and write files on the local filesystem.")
+
 (defparameter *enable-interaction* t
   "If true, enables the Gemini model to interact with the user via read and yes-or-no prompts.")
 
@@ -317,23 +320,6 @@
 (defun search-system-instruction ()
   (read-system-instruction "search-system-instruction"))
 
-(defun mcp-system-instruction ()
-  (plist-hash-table
-   `(:text ,(str:join #\newline
-                      (list*
-                       "### MCP Clients Available"
-                       ""
-                       (map 'list (lambda (client)
-                                    (format nil "## ~a~%~a~%~%~{~a~%~}"
-                                            (get-name client)
-                                            (car (get-system-instruction client))
-                                            (map 'list (lambda (tool)
-                                                         (format nil "~&# ~a~%~a~%"
-                                                                 (get-name tool)
-                                                                 (get-description tool)))
-                                                 (get-tools client))))
-                            *mcp-clients*))))))
-
 (defun default-system-instruction ()
   "Returns the value of *SYSTEM-INSTRUCTION* if it is bound, otherwise NIL.
    Provides a default system instruction for generation."
@@ -360,10 +346,7 @@
               (web-system-instruction))
 
             (when (and (boundp '*enable-web-search*) *enable-web-search*)
-              (search-system-instruction))
-
-            (when (and (boundp '*mcp-clients*) *mcp-clients*)
-              (mcp-system-instruction))))
+              (search-system-instruction))))
          :role "system"))))
 
 (defvar *tool-config*)

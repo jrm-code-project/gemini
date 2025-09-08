@@ -359,3 +359,54 @@ Does not add values to ALISTS."
   "Return a list of top-level functions defined anywhere."
   (sort (remove-duplicates (mappend #'external-variables (filter-package-list)))
         #'string< :key #'symbol-name))
+
+(defun ensure-directory-pathname (pathname)
+  "Ensures that the given PATHNAME ends with a directory separator.
+   If PATHNAME is a string, it converts it to a pathname first."
+  (let ((path (if (stringp pathname)
+                  (truename (merge-pathnames pathname))
+                  pathname)))
+    (if (and (or (eq (pathname-name path) :unspecific)
+                 (null (pathname-name path))
+                 (and (stringp (pathname-name path))
+                      (zerop (length (pathname-name path)))))
+             (or (eq (pathname-type path) :unspecific)
+                 (null (pathname-type path))
+                 (and (stringp (pathname-type path))
+                      (zerop (length (pathname-type path))))))
+        path
+        (make-pathname
+         :directory
+         (reverse
+          (cons (concatenate 'string
+                             (cond ((stringp (pathname-name path)) (pathname-name path))
+                                   ((or (null (pathname-name path))
+                                        (eq (pathname-name path) :unspecific)) "")
+                                   (t (error "Unexpected pathname name: ~s" (pathname-name  path))))
+                             (cond ((stringp (pathname-type path))
+                                    (concatenate 'string "." (pathname-type path)))
+                                   ((or (null (pathname-type path))
+                                        (eq (pathname-type path) :unspecific)) "")
+                                   (t (error "Unexpected pathname type: ~s" (pathname-type path)))))
+                (reverse (pathname-directory path))))))))
+
+(defun next-suffix (suffix)
+  "Given a suffix like '~' or '~1', returns the next suffix in sequence.
+   For example, '~' becomes '~1', '~1' becomes '~2', and so on."
+  (if (string= suffix "~")
+      "~1"
+      (let* ((number-part (subseq suffix 1))
+             (number (parse-integer number-part :junk-allowed t)))
+        (if number
+            (format nil "~~~a" (1+ number))
+            (error "Invalid suffix format: ~s" suffix)))))
+
+(defun backup-pathname (pathname &optional (suffix "~"))
+  (let ((backup (pathname (concatenate 'string (namestring pathname) suffix))))
+    (if (probe-file backup)
+        (backup-pathname pathname (next-suffix suffix))
+        (copy-file pathname backup))))
+
+(defun backup-file (pathname)
+  (when (probe-file pathname)
+    (rename-file pathname (backup-pathname pathname))))

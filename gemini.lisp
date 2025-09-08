@@ -23,7 +23,7 @@
                  payload)
            (setq aborted nil))
       (let ((elapsed-time (local-time:timestamp-difference (local-time:now) start-time)))
-        (format *trace-output* "~&;; Gemini API ~:[finished in~;aborted after~] ~a seconds.~%" aborted
+        (format *trace-output* "~&;; Gemini API ~:[finished in~;aborted after~] ~,2f seconds.~%" aborted
                 elapsed-time)))))
 
 (defun get-handler (name function-and-handler-list)

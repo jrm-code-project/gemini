@@ -21,7 +21,7 @@
                "str"
                "trivial-backtrace"
                "uiop")
-  :components ((:file "analyze-source" :depends-on ("gemini" "object" "package" "vars"))
+  :components ((:file "analyze"   :depends-on ("gemini" "object" "package" "vars"))
                (:file "asdfx"     :depends-on ("package"))
                (:file "blogger"   :depends-on ("gemini" "object" "package" "vars"))
                (:file "debug"     :depends-on ("gemini" "misc" "object" "package" "vars"))

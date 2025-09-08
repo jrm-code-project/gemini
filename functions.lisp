@@ -120,6 +120,26 @@ This `bash` access empowers you to perform a wide array of system-level operatio
                   (describe sym))
                 "Error: Symbol not found.")))))
 
+     (when *enable-file-system*
+       (cons
+        (function-declaration
+         :name "listDirectory"
+         :description "Returns a list of files in the given directory or folder."
+         :behavior :blocking
+         :parameters (schema :type :object
+                             :properties (object :directory
+                                                 (schema :type :string
+                                                         :description "The directory to list the files of."))
+                             :required (vector :directory))
+         :response (schema :type :array
+                           :items (schema :type :string)))
+        (lambda (&key directory)
+          (map 'vector #'namestring
+               (directory
+                (merge-pathnames (make-pathname :name :wild
+                                                :type :wild)
+                                 (ensure-directory-pathname directory)))))))
+
      (when *enable-eval*
        (cons
         (function-declaration
@@ -548,6 +568,24 @@ This `bash` access empowers you to perform a wide array of system-level operatio
 
      (cons
       (function-declaration
+       :name "readFileLines"
+       :description "Returns the lines of a file as a vector of strings."
+       :behavior :blocking
+       :parameters (schema :type :object
+                           :properties (object :file
+                                               (schema :type :string
+                                                       :description "The path to the file to read."))
+                           :required (vector :file))
+       :response (schema :type :array
+                         :items (schema :type :string)))
+      (lambda (&key file)
+        (format *trace-output* "~&Reading file: ~a~%" file)
+        (finish-output *trace-output*)
+        (collect 'vector
+          (scan-file file #'read-line))))
+
+     (cons
+      (function-declaration
        :name "shortSiteName"
        :description (or (documentation 'short-site-name 'function)
                         "Returns the short site name of the machine.")
@@ -702,6 +740,33 @@ This `bash` access empowers you to perform a wide array of system-level operatio
                        (get-items
                         (google:web-search
                          (str:join "+" (str:split " " search-terms :omit-nulls t)))))))))
+
+     (cons
+      (function-declaration
+       :name "writeFileLines"
+       :description "Write a vector of strings to a file."
+       :behavior :blocking
+       :parameters (schema :type :object
+                           :properties (object :file
+                                               (schema :type :string
+                                                       :description "The path to the file to read.")
+                                               :lines
+                                               (schema :type :array
+                                                       :items (schema :type :string)
+                                                       :description "The lines to write to the file."))
+                            :required (vector :file :lines)))
+      (lambda (&key file lines)
+        (handler-case
+            (progn
+              (format *trace-output* "~&Writing file: ~a~%" file)
+              (finish-output *trace-output*)
+              (ensure-directories-exist file)
+              (format *trace-output* "~&Directories exist: ~a~%" file)
+              (finish-output *trace-output*)
+              (backup-file file)
+              (collect-file file (scan 'vector lines) #'write-line))
+          (error (e)
+            (format *trace-output* "~&Error writing file ~a: ~a~%" file e)))))
 
      (when *enable-interaction*
        (cons
