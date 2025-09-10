@@ -411,28 +411,30 @@
           (reinvoke-gemini)))))
 
 (defun reinvoke-gemini (&key
-                               ((:model *model*) +default-model+)
-                               (cached-content (default-cached-content))
-                               (generation-config (default-generation-config))
-                               (tools (default-tools))
-                               (tool-config (default-tool-config))
-                               (safety-settings (default-safety-settings))
-                               (system-instruction (default-system-instruction)))
-    (let ((payload (object :contents (reverse *prior-context*))))
-      (when cached-content
-        (setf (get-cached-content payload) cached-content))
-      (when generation-config
-        (setf (get-generation-config payload) generation-config))
-      (when safety-settings
-        (setf (get-safety-settings payload) safety-settings))
-      (when system-instruction
-        (setf (get-system-instruction payload) system-instruction))
-      (when tools
-        (setf (get-tools payload) tools))
-      (when (and tools tool-config)
-        (setf (get-tool-config payload) tool-config))
-      (or (funcall (compose *output-processor* #'error-check) (%invoke-gemini *model* payload))
-          (reinvoke-gemini))))
+                          (reinvocation-count 0)
+                          ((:model *model*) +default-model+)
+                          (cached-content (default-cached-content))
+                          (generation-config (default-generation-config))
+                          (tools (default-tools))
+                          (tool-config (default-tool-config))
+                          (safety-settings (default-safety-settings))
+                          (system-instruction (default-system-instruction)))
+  (let ((payload (object :contents (reverse *prior-context*)))
+        (*temperature* (+ *temperature* (/ (- 2.0 *temperature*) 8.0))))
+    (when cached-content
+      (setf (get-cached-content payload) cached-content))
+    (when generation-config
+      (setf (get-generation-config payload) generation-config))
+    (when safety-settings
+      (setf (get-safety-settings payload) safety-settings))
+    (when system-instruction
+      (setf (get-system-instruction payload) system-instruction))
+    (when tools
+      (setf (get-tools payload) tools))
+    (when (and tools tool-config)
+      (setf (get-tool-config payload) tool-config))
+    (or (funcall (compose *output-processor* #'error-check) (%invoke-gemini *model* payload))
+        (reinvoke-gemini :reinvocation-count (1+ reinvocation-count)))))
 
 (defun continue-gemini (content)
   "Continues the conversation with the Gemini model using the provided CONTENT.
