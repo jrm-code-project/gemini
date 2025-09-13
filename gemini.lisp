@@ -17,11 +17,14 @@
   (let ((start-time (local-time:now))
         (aborted t))
     (unwind-protect
-         (prog1 (google:google-post
-                 (concatenate 'string +gemini-api-base-url+ model-id ":generateContent")
-                 (google:gemini-api-key)
-                 payload)
-           (setq aborted nil))
+         (progn
+           (format *trace-output* "~&;; Invoking Gemini API model `~a`...~%" model-id)
+           (finish-output *trace-output*)
+           (prog1 (google:google-post
+                   (concatenate 'string +gemini-api-base-url+ model-id ":generateContent")
+                   (google:gemini-api-key)
+                   payload)
+             (setq aborted nil)))
       (let ((elapsed-time (local-time:timestamp-difference (local-time:now) start-time)))
         (format *trace-output* "~&;; Gemini API ~:[finished in~;aborted after~] ~,2f seconds.~%" aborted
                 elapsed-time)))))
@@ -132,8 +135,12 @@
 (defun process-thought (thought)
   "Processes a thought part object.
    If the thought is a text part, it formats the text and outputs it to *trace-output*."
-  (format *trace-output* "~&~{;; ~a~%~}"
-          (mappend #'reflow-line (str:split #\newline (get-text thought)))))
+  (format *trace-output* "~&~%~{;; ~a~%~}~%"
+          (reverse
+           (let ((rev (reverse (mappend #'reflow-line (str:split #\newline (get-text thought))))))
+                (if (and rev (string= "" (car rev)))
+                    (cdr rev)
+                    rev)))))
 
 (defun process-thoughts (thoughts)
   "Processes a list of thought part objects.
@@ -241,6 +248,49 @@
          (list (content :parts (mapcar #'part thing) :role "user")))
         (t (error "Unrecognized type for prompt: ~s" thing))))
   
+;; (setq +max-prompt-tokens+ 8192)
+;;   "The maximum number of tokens allowed in the prompt context before compression is needed.")
+
+;; (defun maybe-compress-context (results)
+;;   "Compresses the conversation context if it exceeds the maximum allowed tokens.
+;;    Returns the results unchanged."
+;;   (when (> (get-prompt-token-count (get-usage-metadata results)) +max-prompt-tokens+)
+;;     (format *trace-output* "~&;; Prompt token count exceeds ~d tokens, compressing context.~%" +max-prompt-tokens+)
+;;     (let* ((uncompressed *context*)
+;;            (prompt (car *context*))
+;;            (history (cdr *context*))
+;;            (header (car (reverse history))))
+;;       ;; Ensure the first content in the context is a user message
+;;       ;; This is the prompt that elicited the current response.
+;;       (assert (equal (get-role (car uncompressed)) "user")
+;;               () "The first content in the context must be a user message.")
+;;       ;; Ensure the second content in the context is a model message
+;;       ;; this is the conversation up to the most recent prompt.
+;;       (assert (equal (get-role (cadr uncompressed)) "model")
+;;               () "The second content in the context must be a model message.")
+
+;;       (let ((compressed
+;;               (let ((*context* history)
+;;                     (*system-instruction*
+;;                       (content
+;;                        :parts
+;;                        (list (part "You are a world class summarizer.  Your summaries are concise, but thorough, preserving important details and key points.  You use bullet points where appropriate."))
+;;                        :role "system"))
+;;                     (*max-output-tokens* (/ +max-prompt-tokens+ 2)))
+;;                 (let retry ((*temperature* 0.0)
+;;                             (results* nil))
+;;                   (if (or (null results*)
+;;                           (get-error results*))
+;;                       (retry (+ *temperature*
+;;                                 (/ (- 2.0 *temperature*) 8.0))
+;;                              (invoke-gemini "Summarize the conversation so far."))
+;;                       (progn
+;;                         (format *trace-output* "~&;; Context compressed to ~d tokens.~%"
+;;                                 (get-prompt-token-count (get-usage-metadata results*)))
+;;                         results*))))))
+;;         (setq *context* (list prompt compressed header)))))
+;;   results)
+
 (defun extend-conversation (new-content)
   (push new-content *context*)
   (setq *prior-context* *context*)
@@ -420,7 +470,13 @@
                           (safety-settings (default-safety-settings))
                           (system-instruction (default-system-instruction)))
   (let ((payload (object :contents (reverse *prior-context*)))
-        (*temperature* (+ *temperature* (/ (- 2.0 *temperature*) 8.0))))
+        (*temperature* (+ (if (boundp '*temperature*)
+                              (symbol-value '*temperature*)
+                              1)
+                          (/ (- 2.0 (if (boundp '*temperature*)
+                                        (symbol-value '*temperature*)
+                                        1))
+                             8.0))))
     (when cached-content
       (setf (get-cached-content payload) cached-content))
     (when generation-config
