@@ -17,6 +17,7 @@
   :code
   :code-execution-result
   :command
+  :completions
   :content
   :contents
   :data
@@ -43,9 +44,12 @@
   :instructions
   :items
   :jsonrpc
+  :keepalive-interval
   :level
   :link
+  :list-changed
   :location
+  :logging
   :logprobs
   :max-output-tokens
   :max-tokens
@@ -97,6 +101,7 @@
   :search-terms
   :seed
   :server-info
+  :server-instructions
   :snippet
   :source
   :speech-config

@@ -155,7 +155,8 @@ This `bash` access empowers you to perform a wide array of system-level operatio
                                                  (schema :type :string
                                                          :description "The string containing the Lisp expression to evaluate.  This should be a complete s-expression or a single Lisp atom."))
                              :required (vector :string))
-         :response (schema :type :string
+         :response (schema :type :array
+                           :items (schema :type :string)
                            :description "The printed representation of the result of evaluating the expression, or an error message if the expression cannot be evaluated."))
         (lambda (&key string)
           (let* ((narrow-string (str:trim string))
@@ -458,6 +459,63 @@ This `bash` access empowers you to perform a wide array of system-level operatio
           (if (stringp version)
               version
               "Unknown"))))
+
+     (when *enable-lisp-introspection*
+       (cons
+        (function-declaration
+         :name "macroexpand"
+         :description (or (documentation 'macroexpand 'function)
+                          "Invokes the Common Lisp `macroexpand` function on the given expression and returns the result.")
+         :behavior :blocking
+         :parameters (schema :type :object
+                             :properties (object :expression
+                                                 (schema :type :string
+                                                         :description "The string containing the Lisp expression to macroexpand.  This should be a complete s-expression."))
+                             :required (vector :expression))
+         :response (schema :type :array
+                           :items (schema :type :string)
+                           :description "The printed representation of the result of macroexpanding the expression, or an error message if the expression cannot be macroexpanded."))
+        (lambda (&key expression)
+          (let* ((narrow-string (str:trim expression))
+                 (length (length narrow-string)))
+            (multiple-value-bind (form count) (read-from-string narrow-string)
+              (if (= count length)
+                  (let ((expanded (multiple-value-list (macroexpand form))))
+                    (format *trace-output* "~{~s~^~%~}" expanded)
+                    expanded)
+                  (progn
+                    (format *trace-output* "~&;; Incomplete expression: ~s~%" narrow-string)
+                    (format *trace-output* "~&;; ~d of ~d characters read.~%" count length)
+                    (finish-output *trace-output*)
+                    (error "End of expression reached early.  Check your expression.  Parentheses **must** be balanced."))))))))
+
+     (when *enable-lisp-introspection*
+       (cons
+        (function-declaration
+         :name "macroexpand-1"
+         :description (or (documentation 'macroexpand-1 'function)
+                          "Invokes the Common Lisp `macroexpand-1` function on the given expression and returns the result.")
+         :behavior :blocking
+         :parameters (schema :type :object
+                             :properties (object :expression
+                                                 (schema :type :string
+                                                         :description "The string containing the Lisp expression to macroexpand.  This should be a complete s-expression."))
+                             :required (vector :expression))
+         :response (schema :type :string
+                           :description "The printed representation of the result of macroexpanding the expression, or an error message if the expression cannot be macroexpanded."))
+        (lambda (&key expression)
+          (let* ((narrow-string (str:trim expression))
+                 (length (length narrow-string)))
+            (multiple-value-bind (form count) (read-from-string narrow-string)
+              (if (= count length)
+                  (let ((expanded (multiple-value-list (macroexpand-1 form))))
+                    (format *trace-output* "~{~s~^~%~}" expanded)
+                    expanded)
+                  (progn
+                    (format *trace-output* "~&;; Incomplete expression: ~s~%" narrow-string)
+                    (format *trace-output* "~&;; ~d of ~d characters read.~%" count length)
+                    (finish-output *trace-output*)
+                    (error "End of expression reached early.  Check your expression.  Parentheses **must** be balanced."))))))))
 
      (cons
       (function-declaration
@@ -807,9 +865,9 @@ This `bash` access empowers you to perform a wide array of system-level operatio
 
 (defun mcp-functions-and-handlers ()
   "Extracts the list of functions supplied by the MCP servers."
-  (fold-left (binary-compose-right #'append #'get-mcp-functions-and-handlers) nil *mcp-clients*))
+  (fold-left (binary-compose-right #'append #'get-mcp-functions-and-handlers) nil *mcp-servers*))
 
-(defun convert-tool (mcp-client tool)
+(defun convert-tool (mcp-server tool)
   "Converts an MCP tool to a function specification."
   (let ((input-schema (get-input-schema tool))
         (output-schema (get-output-schema tool)))
@@ -821,9 +879,10 @@ This `bash` access empowers you to perform a wide array of system-level operatio
            :parameters (encode-schema-type input-schema)
            :response (encode-schema-type output-schema))
           (lambda (&rest args &key &allow-other-keys)
-            (call-tool mcp-client tool (plist-hash-table args))))))
+            (call-tool mcp-server tool (plist-hash-table args))))))
 
-(defun get-mcp-functions-and-handlers (mcp-client)
-  "Returns the functions and handlers for the given MCP client."
-  (when (has-tools-capability? mcp-client)
-    (map 'list (lambda (tool) (convert-tool mcp-client tool)) (get-tools mcp-client))))
+(defun get-mcp-functions-and-handlers (mcp-server)
+  "Returns the functions and handlers for the given MCP server."
+  (when (and (mcp-server-alive? mcp-server)
+             (tools-capability mcp-server))
+    (map 'list (lambda (tool) (convert-tool mcp-server tool)) (get-tools mcp-server))))

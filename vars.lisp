@@ -249,7 +249,7 @@
 (defparameter *enable-personality* t
   "If non-NIL, the model will answer in the style of a randomly chosen personality.")
 
-(defparameter *mcp-clients* nil)
+(defparameter *mcp-servers* nil)
 
 (defun personalities-file ()
   (merge-pathnames

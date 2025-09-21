@@ -9,21 +9,23 @@
   (with-open-file (stream (mcp-config-pathname) :direction :input :if-does-not-exist nil)
     (read stream)))
 
-(defclass mcp-client ()
-  ((capability/completions :initarg nil :accessor has-completions-capability?)
-   (capability/elicitation :initarg nil :accessor has-elicitation-capability?)
-   (capability/logging     :initarg nil :accessor has-logging-capability?)
-   (capability/prompts     :initarg nil :accessor has-prompts-capability?)
-   (capability/resources   :initarg nil :accessor has-resources-capability?)
-   (capability/resources/subscribe
-    :initarg nil :accessor has-resources-subscribe-capability?)
-   (capability/tools       :initarg nil :accessor has-tools-capability?)
+(defclass mcp-server ()
+  ((capability/completions            :initarg nil :accessor completions-capability)
+   (capability/logging                :initarg nil :accessor logging-capability)
+   (capability/prompts                :initarg nil :accessor prompts-capability)
+   (capability/prompts/list-changed   :initarg nil :accessor prompts-list-changed-capability)
+   (capability/resources              :initarg nil :accessor resources-capability)
+   (capability/resources/list-changed :initarg nil :accessor resources-list-changed-capability)
+   (capability/resources/subscribe    :initarg nil :accessor resources-subscribe-capability)
+   (capability/tools                  :initarg nil :accessor tools-capability)
+   (capability/tools/list-changed     :initarg nil :accessor tools-list-changed-capability)
 
-   (autonym          :accessor get-autonym)
-   (instructions     :accessor get-instructions)
-   (protocol-version :accessor get-protocol-version)
-   (title            :accessor get-title)
-   (version          :accessor get-version)
+   (autonym             :accessor get-autonym)
+   (instructions        :accessor get-instructions)
+   (server-instructions :accessor get-server-instructions)
+   (protocol-version    :accessor get-protocol-version)
+   (title               :accessor get-title)
+   (version             :accessor get-version)
 
    (config :initarg :config :reader config)
    (context :initarg nil :accessor context)
@@ -39,20 +41,20 @@
    (resource-subscriptions :initform (make-hash-table :test #'equal) :reader resource-subscriptions)
    ))
 
-(defun call-with-mcp-client-mutex (mcp-client thunk)
-  (bordeaux-threads:with-lock-held ((mutex mcp-client))
+(defun call-with-mcp-server-mutex (mcp-server thunk)
+  (bordeaux-threads:with-lock-held ((mutex mcp-server))
     (funcall thunk)))
 
-(defmacro with-mcp-client-mutex ((mcp-client) &body body)
-  `(CALL-WITH-MCP-CLIENT-MUTEX ,mcp-client (LAMBDA () ,@body)))
+(defmacro with-mcp-server-mutex ((mcp-server) &body body)
+  `(CALL-WITH-MCP-SERVER-MUTEX ,mcp-server (LAMBDA () ,@body)))
 
-(defmethod get-prompts ((object mcp-client))
+(defmethod get-prompts ((object mcp-server))
   (force (delayed-prompts object)))
 
-(defmethod get-prompt ((object mcp-client) name)
+(defmethod get-prompt ((object mcp-server) name)
   (jsonrpc (jsonrpc-client object) "prompts/get" (object :name name)))
 
-(defmethod read-resource ((object mcp-client) uri)
+(defmethod read-resource ((object mcp-server) uri)
   (let ((contents (get-contents (jsonrpc (jsonrpc-client object) "resources/read" (object :uri uri)))))
     (cond ((and (consp contents)
                 (null (cdr contents)))
@@ -66,14 +68,14 @@
           ((null contents) nil)
           (t (error "Unrecognized contents: ~s" contents)))))
 
-(defmethod get-resources ((object mcp-client))
+(defmethod get-resources ((object mcp-server))
   (force (delayed-resources object)))
 
-(defmethod get-resource-templates ((object mcp-client))
+(defmethod get-resource-templates ((object mcp-server))
   (force (delayed-resource-templates object)))
 
-(defun find-resource-template (mcp-client name)
-  (find name (get-resource-templates mcp-client) :test #'equal :key #'get-name))
+(defun find-resource-template (mcp-server name)
+  (find name (get-resource-templates mcp-server) :test #'equal :key #'get-name))
 
 (defun expand-resource-template (resource-template substitution-plist)
   (let ((expanded-1 (expand-resource-template-1 resource-template substitution-plist)))
@@ -97,49 +99,60 @@
                             (error "No substitution for {~a}" between))
                         after)))))))
 
-(defun read-resource-by-template (mcp-client template-name &rest substitution-plist)
+(defun read-resource-by-template (mcp-server template-name &rest substitution-plist)
   "Read a resource by its template name, substituting args into the template."
-  (let ((template (get-uri-template (find-resource-template mcp-client template-name))))
+  (let ((template (get-uri-template (find-resource-template mcp-server template-name))))
     (if (null template)
         (error "No resource template named ~a" template-name)
         (let ((expanded-template (expand-resource-template template substitution-plist)))
-          (read-resource mcp-client expanded-template)))))
+          (read-resource mcp-server expanded-template)))))
 
-(defun subscribe-to-resource (mcp-client resource-uri receiver)
-  "Subscribe to a resource URI in the MCP client."
-  (setf (gethash resource-uri (resource-subscriptions mcp-client)) receiver)
-  (jsonrpc (jsonrpc-client mcp-client) "resources/subscribe" (object :uri resource-uri)))
+(defun subscribe-to-resource (mcp-server resource-uri receiver)
+  "Subscribe to a resource URI in the MCP server."
+  (setf (gethash resource-uri (resource-subscriptions mcp-server)) receiver)
+  (jsonrpc (jsonrpc-client mcp-server) "resources/subscribe" (object :uri resource-uri)))
 
-(defmethod get-system-instruction ((object mcp-client))
+(defmethod get-system-instruction ((object mcp-server))
   (get-system-instruction (config object)))
 
-(defmethod get-tools ((object mcp-client))
+(defmethod get-tools ((object mcp-server))
   (force (delayed-tools object)))
 
-(defmethod print-object ((client mcp-client) stream)
-  (print-unreadable-object (client stream :type t)
-    (format stream "~a" (get-name client))))
+(defmethod print-object ((server mcp-server) stream)
+  (print-unreadable-object (server stream :type t)
+    (format stream "~a" (get-name server))))
 
-(defun find-mcp-client (name)
-  (find name *mcp-clients* :key #'get-name :test #'equal))
+(defparameter +mcp-server-timeout+ (* 5 60)
+  "Timeout in seconds for MCP server responsiveness.")
 
-(defun create-mcp-client (name config)
-  (letrec ((client
+(defun mcp-server-alive? (mcp-server)
+  (< (get-universal-time)
+     (+ (latest-server-output (jsonrpc-client mcp-server))
+        +mcp-server-timeout+)))
+
+(defun find-mcp-server (name)
+  (find name *mcp-servers* :key #'get-name :test #'equal))
+
+(defparameter +default-keepalive-interval+ 30
+  "Default keepalive interval in seconds.")
+
+(defun create-mcp-server (name config)
+  (letrec ((server
             (make-instance
-             'mcp-client
+             'mcp-server
              :config config
              :delayed-prompts   (delay
-                                 (when (has-prompts-capability? client)
+                                 (when (prompts-capability server)
                                    (get-prompts (jsonrpc jsonrpc-clnt "prompts/list" '()))))
              :delayed-resources (delay
-                                 (when (has-resources-capability? client)
+                                 (when (resources-capability server)
                                    (get-resources (jsonrpc jsonrpc-clnt "resources/list" '()))))
              :delayed-resource-templates (delay
-                                          (when (has-resources-capability? client)
+                                          (when (resources-capability server)
                                             (get-resource-templates
                                              (jsonrpc jsonrpc-clnt "resources/templates/list" '()))))
              :delayed-tools     (delay
-                                 (when (has-tools-capability? client)
+                                 (when (tools-capability server)
                                    (get-tools (jsonrpc jsonrpc-clnt "tools/list" '()))))
              :name name))
 
@@ -155,50 +168,67 @@
                (get-args config)
                (lambda (message)
                  (cond ((equal (get-method message) "elicitation/create")
-                        (handle-elicitation client message))
+                        (handle-elicitation server message))
 
                        ((and (equal (get-method message) "notifications/message")
-                             (notification-stream client))
-                        (handle-notification-message client message))
+                             (notification-stream server))
+                        (handle-notification-message server message))
 
                        ((and (equal (get-method message) "notifications/progress")
-                             (notification-stream client))
-                        (handle-notification-progress client message))
+                             (notification-stream server))
+                        (handle-notification-progress server message))
 
                        ((equal (get-method message) "notifications/resources/updated")
-                        (handle-notification-resources-updated client message))
+                        (handle-notification-resources-updated server message))
 
                        ((equal (get-method message) "roots/list")
-                        (handle-roots-list client message))
+                        (handle-roots-list server message))
 
                        ((equal (get-method message) "sampling/createMessage")
-                        (handle-sampling-create-message client message))
+                        (handle-sampling-create-message server message))
 
                        (t (format *trace-output* "~&Unexpected MCP message: ~s~%" (dehashify message))
-                          (finish-output *trace-output*))))))))
+                          (finish-output *trace-output*)))))))
 
-    (setf (jsonrpc-client client) jsonrpc-clnt)
-    (initialize-mcp-client! client)
-    client))
+           (keepalive-thread
+            (bt:make-thread
+             (lambda ()
+               (let iter ()
+                 (sleep 15)
+                 (when (< (+ (latest-server-output jsonrpc-clnt)
+                             (or (get-keepalive-interval config)
+                                 +default-keepalive-interval+))
+                          (get-universal-time))
+                   ;; (format *trace-output* "~&MCP Server ~a keepalive pinging...~%" name)
+                   ;; (finish-output *trace-output*)
+                   (jsonrpc-ping jsonrpc-clnt))
+                 (iter)))
+             :name (format nil "~a-keepalive" name))))
 
-(defun initialize-mcp-client! (mcp-client)
+    (setf (jsonrpc-client server) jsonrpc-clnt)
+    (initialize-mcp-server! server)
+    server))
+
+(defparameter *mcp-protocol-version* "2025-06-18"
+  "The MCP protocol version this server supports.")
+
+(defun initialize-mcp-server! (mcp-server)
   (let* ((client-initialization-info
            (object :capabilities (object :elicitation (object)
                                          :roots (object :list-changed jsonx:+json-true+)
                                          :sampling (object))
                    :client-info (object :display-name "SBCL Gemini Client"
                                         :name "SBCLGeminiClient"
-                                        :version "1.0.0")
-                   :protocol-version "2024-11-05"))
+                                        :version "1.1.0")
+                   :protocol-version *mcp-protocol-version*))
 
          (server-initialization-info
-           (prog1 (jsonrpc (jsonrpc-client mcp-client) "initialize" client-initialization-info)
-             (chanl:send (outgoing-channel (jsonrpc-client mcp-client))
+           (prog1 (jsonrpc (jsonrpc-client mcp-server) "initialize" client-initialization-info)
+             (chanl:send (outgoing-channel (jsonrpc-client mcp-server))
                          (object :jsonrpc "2.0"
                                  :method "notifications/initialized"))))
 
          (capabilities (get-capabilities server-initialization-info))
-         (capabilities-keys (keys capabilities))
 
          (instructions (get-instructions server-initialization-info))
 
@@ -207,25 +237,34 @@
          (server-info (get-server-info server-initialization-info))
          (server-name    (get-name server-info))
          (server-title   (get-title server-info))
-         (server-version (get-version server-info)))
+         (server-version (get-version server-info))
 
-    (setf (has-completions-capability? mcp-client) (->boolean (member :completions capabilities-keys))
-          (has-elicitation-capability? mcp-client) (->boolean (member :elicitation capabilities-keys))
-          (has-logging-capability?     mcp-client) (->boolean (member :logging     capabilities-keys))
-          (has-prompts-capability?     mcp-client) (->boolean (member :prompts     capabilities-keys))
-          (has-resources-capability?   mcp-client) (->boolean (member :resources   capabilities-keys))
-          (has-tools-capability?       mcp-client) (->boolean (member :tools       capabilities-keys))
-          (get-autonym mcp-client) server-name
-          (get-instructions mcp-client) instructions
-          (get-protocol-version mcp-client) protocol-version
-          (get-title mcp-client)   server-title
-          (get-version mcp-client) server-version)
-    (when (has-resources-capability? mcp-client)
-      (setf (has-resources-subscribe-capability? mcp-client) (get-subscribe (get-resources capabilities))))
+         (server-instructions (get-server-instructions server-initialization-info)))
+
+    (format t "~&MCP Server ~a~%" (dehashify server-initialization-info))
+
+    (setf (completions-capability mcp-server) (get-completions capabilities)
+          (logging-capability     mcp-server) (get-logging     capabilities)
+          (prompts-capability     mcp-server) (get-prompts     capabilities)
+          (resources-capability   mcp-server) (get-resources   capabilities)
+          (tools-capability       mcp-server) (get-tools       capabilities)
+          (get-autonym mcp-server) server-name
+          (get-instructions mcp-server) instructions
+          (get-protocol-version mcp-server) protocol-version
+          (get-title mcp-server)   server-title
+          (get-version mcp-server) server-version
+          (get-server-instructions mcp-server) server-instructions)
+    (when (prompts-capability mcp-server)
+      (setf (prompts-list-changed-capability mcp-server) (get-list-changed (get-prompts capabilities))))
+    (when (resources-capability mcp-server)
+      (setf (resources-subscribe-capability mcp-server) (get-subscribe (get-resources capabilities)))
+      (setf (resources-list-changed-capability mcp-server) (get-list-changed (get-resources capabilities))))
+    (when (tools-capability mcp-server)
+      (setf (tools-list-changed-capability mcp-server) (get-list-changed (get-tools capabilities))))
          
-    (format t "~&MCP Client ~a initialized.~%" server-name)))
+    (format t "~&MCP Server ~a initialized.~%" server-name)))
 
-(defun handle-elicitation (client message)
+(defun handle-elicitation (server message)
   (format t "~&~s~%" message)
   (finish-output)
   (let* ((params (get-params message))
@@ -233,7 +272,7 @@
          (requested-schema (get-requested-schema params))
          ;;(type (get-type requested-schema))
          )
-    (format *query-io* "~%MCP Server ~a elicits a response: ~a~%" (get-autonym client) msg)
+    (format *query-io* "~%MCP Server ~a elicits a response: ~a~%" (get-autonym server) msg)
     (finish-output *query-io*)
     (let ((response
             (let iter ((thing (cons :requested-schema requested-schema)))
@@ -260,47 +299,47 @@
                             ((equal (get-type components) "object")
                              (map 'list #'iter (get-properties components)))
                             (t (error "Unrecognized schema"))))))))
-      (chanl:send (outgoing-channel (jsonrpc-client client))
+      (chanl:send (outgoing-channel (jsonrpc-client server))
                   (object :jsonrpc "2.0"
                           :id (get-id message)
                           :result (object :action "accept"
                                           :content (cdr response)))))))
 
-(defun handle-notification-message (client message)
+(defun handle-notification-message (server message)
   (let* ((params (get-params message))
          (level  (->keyword (get-level  params)))
          (data   (get-data   params)))
-    (when (funcall (notification-filter client) level)
-      (format (notification-stream client)
-              "~&~a MCP ~:(~a~) Notification: ~a~%" (get-autonym client) level data)
-      (finish-output (notification-stream client)))))
+    (when (funcall (notification-filter server) level)
+      (format (notification-stream server)
+              "~&~a MCP ~:(~a~) Notification: ~a~%" (get-autonym server) level data)
+      (finish-output (notification-stream server)))))
 
-(defun handle-notification-progress (client message)
+(defun handle-notification-progress (server message)
   (let* ((params (get-params message))
          (progress (get-progress params))
          (token    (get-progress-token params))
          (total    (get-total params)))
-    (format (notification-stream client)
+    (format (notification-stream server)
             "~&~s (~d/~d)~%" token progress total)
-    (finish-output (notification-stream client))))
+    (finish-output (notification-stream server))))
 
-(defun handle-notification-resources-updated (client message)
+(defun handle-notification-resources-updated (server message)
   (let* ((params (get-params message))
          (uri    (get-uri    params))
-         (handler (gethash uri (resource-subscriptions client))))
+         (handler (gethash uri (resource-subscriptions server))))
     (when handler
       (funcall handler uri))))
 
-(defun handle-roots-list (client message)
+(defun handle-roots-list (server message)
   (chanl:send
-   (outgoing-channel (jsonrpc-client client))
+   (outgoing-channel (jsonrpc-client server))
    (object :jsonrpc "2.0"
            :id (get-id message)
            :result (object :roots
                            (vector (object :uri "file:///home/jrm/gemini"
                                            :name "Gemini"))))))
 
-(defun handle-sampling-create-message (client message)
+(defun handle-sampling-create-message (server message)
   (let* ((params (get-params message))
          (include-context (->keyword (get-include-context params)))
          (max-tokens (get-max-tokens params))
@@ -314,7 +353,7 @@
                           :parts (list (part system-prompt))))
                        (*max-output-tokens* max-tokens)
                        (*return-text-string* nil)
-                       (*context* (context client))
+                       (*context* (context server))
                        (*temperature* temperature)
                        (prompt (remove nil (map 'list (lambda (message)
                                                         (let* ((role (get-role message))
@@ -326,15 +365,15 @@
                                                                :parts (list (part (get-text content)))))))
                                                 messages))))
                    (if include-context
-                       (setf *prior-context* (context client))
+                       (setf *prior-context* (context server))
                        (setf *prior-context* nil))
                    (let ((result (continue-gemini prompt)))
                      (if include-context
-                         (setf (context client) (append result *prior-context*))
-                         (setf (context client) result))
+                         (setf (context server) (append result *prior-context*))
+                         (setf (context server) result))
                      result))))
     (format t "~&sample: ~s~%" (dehashify sample))
-    (chanl:send (outgoing-channel (jsonrpc-client client))
+    (chanl:send (outgoing-channel (jsonrpc-client server))
                 (object :jsonrpc "2.0"
                         :id (get-id message)
                         :result 
@@ -347,24 +386,23 @@
                          :stop-reason "endTurn"
                          )))))
 
-
-(defun start-mcp-clients ()
-  (unless *mcp-clients*
+(defun start-mcp-servers ()
+  (unless *mcp-servers*
     (let ((config (read-mcp-config)))
       (when config
-        (dolist (client-config (get-mcp-servers config))
-          (let ((name (car client-config)))
-            (push (create-mcp-client name (cdr client-config)) *mcp-clients*)))))))
+        (dolist (server-config (get-mcp-servers config))
+          (let ((name (car server-config)))
+            (push (create-mcp-server name (cdr server-config)) *mcp-servers*)))))))
 
 (eval-when (:load-toplevel :execute)
-  (start-mcp-clients))
+  (start-mcp-servers))
 
-(defun find-tool (mcp-client tool-name)
-  "Find a tool by name in the MCP client."
-  (find tool-name (get-tools mcp-client) :test #'equal :key #'get-name))
+(defun find-tool (mcp-server tool-name)
+  "Find a tool by name in the MCP server."
+  (find tool-name (get-tools mcp-server) :test #'equal :key #'get-name))
 
-(defun call-tool (mcp-client tool params)
-  (jsonrpc (jsonrpc-client mcp-client)
+(defun call-tool (mcp-server tool params)
+  (jsonrpc (jsonrpc-client mcp-server)
            "tools/call" (object :_meta (object :progress-token (format nil "~aProgress" (get-name tool)) )
                                 :name (get-name tool)
                                 :arguments (or params
@@ -372,17 +410,17 @@
                                 )))
 
 (defun test-tools ()
-  (let ((client (find-mcp-client "Everything")))
-    (print (call-tool client (find-tool client "echo") (object :message "Hello, MCP!")))
+  (let ((server (find-mcp-server "Everything")))
+    (print (call-tool server (find-tool server "echo") (object :message "Hello, MCP!")))
     (finish-output)
-    (print (call-tool client (find-tool client "add") (object :a 42 :b 69 )))
+    (print (call-tool server (find-tool server "add") (object :a 42 :b 69 )))
     (finish-output)
-    ;; (print (call-tool client (find-tool client "longRunningOperation") (object :duration 15 :steps 10)))
+    ;; (print (call-tool server (find-tool server "longRunningOperation") (object :duration 15 :steps 10)))
     ;; (finish-output)
-    ;; (print (call-tool client (find-tool client "printEnv")))
+    ;; (print (call-tool server (find-tool server "printEnv")))
     ;; (finish-output)
-    (print (call-tool client (find-tool client "sampleLLM") (object :prompt "Magic Eight Ball phrases")))
+    (print (call-tool server (find-tool server "sampleLLM") (object :prompt "Magic Eight Ball phrases")))
     (finish-output)
-    ;; (print (call-tool client (find-tool client "startElicitation") +json-empty-object+))
+    ;; (print (call-tool server (find-tool server "startElicitation") +json-empty-object+))
     ;; (finish-output)
     ))
