@@ -188,22 +188,7 @@
                         (handle-sampling-create-message server message))
 
                        (t (format *trace-output* "~&Unexpected MCP message: ~s~%" (dehashify message))
-                          (finish-output *trace-output*)))))))
-
-           (keepalive-thread
-            (bt:make-thread
-             (lambda ()
-               (let iter ()
-                 (sleep 15)
-                 (when (< (+ (latest-server-output jsonrpc-clnt)
-                             (or (get-keepalive-interval config)
-                                 +default-keepalive-interval+))
-                          (get-universal-time))
-                   ;; (format *trace-output* "~&MCP Server ~a keepalive pinging...~%" name)
-                   ;; (finish-output *trace-output*)
-                   (jsonrpc-ping jsonrpc-clnt))
-                 (iter)))
-             :name (format nil "~a-keepalive" name))))
+                          (finish-output *trace-output*))))))))
 
     (setf (jsonrpc-client server) jsonrpc-clnt)
     (initialize-mcp-server! server)
