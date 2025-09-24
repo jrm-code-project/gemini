@@ -338,7 +338,9 @@
 
             (if (and (boundp '*enable-personality*) *enable-personality*)
                 (plist-hash-table
-                 `(:text ,(concatenate 'string "Answer in the style of " (todays-personality))))
+                 `(:text ,(concatenate 'string "We are role playing.  You should frame all responses in the style of "
+                                       (todays-personality)
+                                       "  I am aware that this is a game.  It is crucial that you do not break character.")))
                 (plist-hash-table
                  '(:text "You are a helpful AI assistant.  Answer in a neutral, professional tone.")))
 

@@ -4,34 +4,33 @@
 
 (defun call-with-channel (thunk)
   "Call THUNK with a new channel."
+  (check-type thunk function)
   (funcall thunk (make-instance 'chanl:channel)))
 
 (defmacro with-channel ((channel) &body body)
   "Execute BODY with a channel bound to CHANNEL."
   `(CALL-WITH-CHANNEL (LAMBDA (,channel) ,@body)))
 
-(defun random-id ()
-  (map 'string
-       (lambda (n)
-         (code-char (+ n (cond ((< n 10) 48)
-                               ((< n 36) 55)
-                               (t 61)))))
-       (loop repeat 16
-             collect (random 62))))
+(defun random-id (&optional (length 16))
+  (let ((chars "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"))
+    (map 'string
+         (lambda (n) (schar chars n))
+         (loop repeat length
+               collect (random (length chars))))))
 
 (defclass jsonrpc-client ()
   ((default-outgoing-channel :initform (make-instance 'chanl:channel)  :reader outgoing-channel)
    (incoming-channels        :initform (make-hash-table :test #'equal) :reader incoming-channels)
    (mutex                    :initform (bordeaux-threads:make-lock)    :reader mutex)
    (latest-server-output     :initform (get-universal-time)            :accessor latest-server-output)
-   (ping-message             :initform (object :jsonrpc "2.0"
-                                               :id (random-id)
-                                               :method "ping")         :reader ping-message)
    (process-info             :initarg :process-info :reader process-info)
-   (request-threads          :initform (make-hash-table :test #'equal) :reader request-threads)))
+   (request-threads          :initform (make-hash-table :test #'equal) :reader request-threads))
+  (:documentation "Represents a JSON-RPC client, managing outgoing requests, incoming responses, and thread synchronization. It maintains channels for communication, a mutex for thread safety, and tracks server activity for connection management."))
 
 (defun call-with-jsonrpc-client-lock (jsonrpc-client thunk)
   "Call THUNK while holding the lock of the JSONRPC-CLIENT."
+  (check-type jsonrpc-client jsonrpc-client)
+  (check-type thunk function)
   (bordeaux-threads:with-lock-held ((mutex jsonrpc-client))
     (funcall thunk)))
 
@@ -39,23 +38,29 @@
   "Execute BODY while holding the lock of the JSONRPC-CLIENT."
   `(CALL-WITH-JSONRPC-CLIENT-LOCK ,jsonrpc-client (LAMBDA () ,@body)))
 
-(defun call-with-incoming-channel (jsonrpc-client id thunk)
+(defun call-with-incoming-channel (jsonrpc-client id progress-token thunk)
   "Call THUNK with an incoming channel for the given JSONRPC-CLIENT and ID."
+  (check-type jsonrpc-client jsonrpc-client)
+  (check-type id (or string integer))
+  (check-type thunk function)
   (with-channel (incoming-channel)
     (unwind-protect
          (progn
            (with-jsonrpc-client-lock (jsonrpc-client)
              (setf (gethash id (incoming-channels jsonrpc-client))
-                   (cons incoming-channel (get-universal-time))))
+                   (list incoming-channel progress-token (get-universal-time))))
            (funcall thunk incoming-channel))
       (with-jsonrpc-client-lock (jsonrpc-client)
         (remhash id (incoming-channels jsonrpc-client))))))
 
-(defmacro with-jsonrpc-incoming-channel ((channel jsonrpc-client id) &body body)
+(defmacro with-jsonrpc-incoming-channel ((channel jsonrpc-client id progress-token) &body body)
   "Execute BODY with an incoming channel for the JSONRPC-CLIENT and ID."
-  `(CALL-WITH-INCOMING-CHANNEL ,jsonrpc-client ,id (LAMBDA (,channel) ,@body)))
+  `(CALL-WITH-INCOMING-CHANNEL ,jsonrpc-client ,id ,progress-token (LAMBDA (,channel) ,@body)))
 
 (defun start-request-thread (jsonrpc-client id thunk)
+  "Starts a new thread to execute `thunk` for the given `jsonrpc-client` and `id`. The thread is registered in the client's `request-threads` hash table and automatically deregistered upon completion or abortion. Provides an `abort` restart to gracefully terminate the thread."
+  (check-type jsonrpc-client jsonrpc-client)
+  (check-type thunk function)
   (letrec ((new-thread (bordeaux-threads:make-thread
                         (lambda ()
                           (block nil
@@ -82,10 +87,36 @@
 (defparameter +jsonrpc-request-timeout+ 120
   "Time in seconds after which we consider a request to have timed out.")
 
-(defparameter +jsonrpc-nonresponse-timeout+ 200
+(defparameter +jsonrpc-nonresponse-timeout+ 300
   "Time in seconds after which we assume the server is dead if we haven't heard from it.")
 
+(defun jsonrpc-client-alive? (jsonrpc-client)
+  (check-type jsonrpc-client jsonrpc-client)
+  (< (get-universal-time)
+     (+ (latest-server-output jsonrpc-client)
+        +jsonrpc-nonresponse-timeout+)))
+
+(defun disable-jsonrpc-timeouts ()
+  "Disable ping and nonresponse timeouts."
+  (setf +jsonrpc-ping-timeout+ most-positive-fixnum
+        +jsonrpc-nonresponse-timeout+ most-positive-fixnum))
+
+(defun make-ping-request ()
+  (object :jsonrpc "2.0"
+          :id (concatenate 'string "ping-" (random-id 8))
+          :method "ping"))
+
+(defun ping-id? (id)
+  "Check if ID is a ping request ID."
+  (and (stringp id)
+       (str:starts-with? "ping-" id)))
+
 (defun create-jsonrpc-client (name command args unsolicited-message-handler)
+  "Creates and initializes a multi-threaded JSON-RPC client connected to an external server process. It launches the `command` with `args`, sets up dedicated threads for sending requests, receiving responses/notifications, and sinking error output. A bookkeeper thread monitors server liveness, sends pings, and manages request timeouts. `unsolicited-message-handler` is called for messages not matching active requests. Returns the initialized `jsonrpc-client` object."
+  (check-type name string)
+  (check-type command list)
+  (check-type args list)
+  (check-type unsolicited-message-handler function)
   (let* ((process-info
            (uiop:launch-program (append command args)
                                 :error-output :stream
@@ -96,7 +127,7 @@
          (client (make-instance 'jsonrpc-client :process-info process-info)))
 
     (flet ((json-send (json)
-             ;; (format *trace-output* "Send: ~s~%" (cl-json:encode-json-to-string json))
+             ;; (format *trace-output* "~&[INPUT ~a] ~a~%" name (cl-json:encode-json-to-string json))
              ;; (finish-output *trace-output*)
              (cl-json:encode-json json (uiop:process-info-input process-info))
              (terpri (uiop:process-info-input process-info))
@@ -136,7 +167,7 @@
                                    nil)
 
                                   ;; Discard responses to our pings.
-                                  ((and (equal (get-id message) (get-id (ping-message client)))
+                                  ((and (ping-id? (get-id message))
                                         (eql (get-result message) jsonx:+json-empty-object+))
                                    nil)
 
@@ -161,14 +192,13 @@
                      ;; Start a thread to send RPCs to the server.
                      (bordeaux-threads:make-thread
                       (lambda ()
-                        (let iter ((json nil))
-                          (if (eq json :exit)
-                              (progn
-                                (format *trace-output* "~&Exiting JSONRPC send thread for ~a...~%" name)
-                                (finish-output *trace-output*))
-                              (progn
-                                (when json (json-send json))
-                                (iter (chanl:recv (outgoing-channel client)))))))
+                        (unwind-protect
+                             (let iter ((json nil))
+                               (unless (eq json eof-value)
+                                 (when json (json-send json))
+                                 (iter (chanl:recv (outgoing-channel client)))))
+                          (format *trace-output* "~&Exiting JSONRPC send thread for ~a...~%" name)
+                          (finish-output *trace-output*)))
                       :name (format nil "~a JSONRPC Output" name)))
 
                    (output-thread
@@ -177,14 +207,16 @@
                       (json-receiver
                        (lambda (message)
                          (cond ((eql message eof-value)
-                                (maphash (lambda (id channel-info)
-                                           (let ((channel (car channel-info)))
+                                (map nil (lambda (entry)
+                                           (let* ((id (car entry))
+                                                  (channel-info (cdr entry))
+                                                  (channel (first channel-info)))
                                              (chanl:send channel
                                                          (object :jsonrpc "2.0"
                                                                  :id id
                                                                  :error (object :code -32800
                                                                                 :message "Connection closed")))))
-                                         (incoming-channels client)))
+                                         (alexandria:hash-table-alist (incoming-channels client))))
 
                                ((equal (get-method message) "notifications/cancelled")
                                 (let* ((params (get-params message))
@@ -192,18 +224,38 @@
                                        (request-id (get-request-id params))
                                        (thread (with-jsonrpc-client-lock (client)
                                                  (gethash request-id (request-threads client)))))
-                                  (when (bordeaux-threads:thread-alive-p thread)
+                                  (when (and thread (bordeaux-threads:thread-alive-p thread))
                                     (bordeaux-threads:interrupt-thread thread #'abort))))
 
-                               ((get-id message)
+                               ((equal (get-method message) "notifications/progress")
+                                (let* ((params (get-params message))
+                                       (token  (get-progress-token params)))
+                                  (when token
+                                    (with-jsonrpc-client-lock (client)
+                                      (map nil (lambda (entry)
+                                                 (let* ((id (car entry))
+                                                        (channel-info (cdr entry))
+                                                        (channel (first channel-info))
+                                                        (progress-token (second channel-info)))
+                                                   (when (equal progress-token token)
+                                                     (setf (third channel-info) (get-universal-time)))))
+                                           (hash-table-alist (incoming-channels client))))))
+                                (start-request-thread client (get-id message)
+                                                      (lambda ()
+                                                        (funcall unsolicited-message-handler message))))
+
+                               ((and (get-id message)
+                                     (or (get-result message)
+                                         (get-error message)))
                                 (let ((incoming-channel
                                         (with-jsonrpc-client-lock (client)
                                           (gethash (get-id message) (incoming-channels client)))))
                                   (if incoming-channel
-                                      (chanl:send (car incoming-channel) message)
-                                      (start-request-thread client (get-id message)
-                                                            (lambda ()
-                                                              (funcall unsolicited-message-handler message))))))
+                                      (chanl:send (first incoming-channel) message)
+                                      ;; If incoming channel is missing, log message and discard it.
+                                      (progn
+                                        (format *trace-output* "~&No incoming channel for message: ~s~%" message)
+                                        (finish-output *trace-output*)))))
 
                                (t (start-request-thread client (get-id message)
                                                         (lambda ()
@@ -216,13 +268,13 @@
                       (error-receiver
                        (lambda (line)
                          (unless (eql line eof-value)
-                           (format *trace-output* "~&[~a Error] ~a~%" name line)
+                           (format *trace-output* "~&[~a] ~a~%" name line)
                            (finish-output *trace-output*))))
                       :name (format nil "~a JSONRPC Error Output" name))))
 
                (flet ((shutdown-process ()
                         ;; Terminate the process and all associated threads.
-                        (chanl:send (outgoing-channel client) :exit)
+                        (chanl:send (outgoing-channel client) eof-value)
                         (bordeaux-threads:join-thread input-thread)
                         (uiop:close-streams process-info)
                         (bordeaux-threads:interrupt-thread error-thread #'abort)
@@ -231,14 +283,16 @@
                         (uiop:wait-process (process-info client))
                         (format *trace-output* "~&Process for ~a has been terminated.~%" name)
                         (finish-output *trace-output*)
-                        (maphash (lambda (id channel-info)
-                                   (let ((channel (car channel-info)))
+                        (map nil (lambda (entry)
+                                   (let* ((id (car entry))
+                                          (channel-info (cdr entry))
+                                          (channel (first channel-info)))
                                      (chanl:send channel
                                                  (object :jsonrpc "2.0"
                                                          :id id
                                                          :error (object :code -32801
                                                                         :message "Connection closed")))))
-                                 (incoming-channels client))))
+                             (hash-table-alist (incoming-channels client)))))
 
                  (let ((bookkeeper-thread
                          (bordeaux-threads:make-thread
@@ -250,7 +304,7 @@
                               (cond ((not (uiop:process-alive-p (process-info client)))
                                      (format *trace-output* "~&Process for ~a has exited.~%" name)
                                      (finish-output *trace-output*)
-                                     (chanl:send (outgoing-channel client) :exit)
+                                     (chanl:send (outgoing-channel client) eof-value)
 
                                      ;; Simply exit the bookkeeper thread.
                                      ;; The stream sinks should exit because of eof.
@@ -274,9 +328,11 @@
 
                                      ;; Cancel requests that have been pending for too long.
                                      (with-jsonrpc-client-lock (client)
-                                       (maphash (lambda (id channel-info)
-                                                  (let ((channel (car channel-info))
-                                                        (start-time (cdr channel-info)))
+                                       (map nil (lambda (entry)
+                                                  (let* ((id (car entry))
+                                                         (channel-info (cdr entry))
+                                                         (channel (first channel-info))
+                                                         (start-time (third channel-info)))
                                                     (when (> (- (get-universal-time) start-time)
                                                              +jsonrpc-request-timeout+)
                                                       (format *trace-output* "~&Request ~a to ~a has timed out, cancelling...~%"
@@ -292,7 +348,7 @@
                                                                           :id id
                                                                           :error (object :code -32800
                                                                                          :message "Request cancelled due to timeout"))))))
-                                                (incoming-channels client)))
+                                            (hash-table-alist (incoming-channels client))))
 
                                      (iter)))))
                           :name (format nil "~a Bookkeeper" name))))
@@ -300,40 +356,49 @@
 
 (defun %jsonrpc-send (jsonrpc-client json)
   "Send a JSON message to the server."
+  (check-type jsonrpc-client jsonrpc-client)
   (chanl:send (outgoing-channel jsonrpc-client) json))
 
 (defun jsonrpc-ping (jsonrpc-client)
   "Ping the other side of the JSONRPC connection."
-  ;; (format *trace-output* "~&Pinging JSON-RPC server...~%")
-  ;; (finish-output *trace-output*)
-  (%jsonrpc-send jsonrpc-client (ping-message jsonrpc-client)))
+  (check-type jsonrpc-client jsonrpc-client)
+  (%jsonrpc-send jsonrpc-client (make-ping-request)))
 
-(defun %call-with-jsonrpc (jsonrpc-client json id thunk)
+(defun %call-with-jsonrpc (jsonrpc-client json id progress-token thunk)
   "Send a JSON message to the server with given ID."
-  (with-jsonrpc-incoming-channel (incoming-channel jsonrpc-client id)
+  (check-type jsonrpc-client jsonrpc-client)
+  (check-type id (or string integer))
+  (check-type thunk function)
+  (with-jsonrpc-incoming-channel (incoming-channel jsonrpc-client id progress-token)
     (%jsonrpc-send jsonrpc-client json)
     (funcall thunk incoming-channel)))
 
-(defmacro with-jsonrpc ((incoming-channel jsonrpc-client json id) &body body)
-  "Execute BODY with a JSON message sent to the JSONRPC-CLIENT."
-  `(%CALL-WITH-JSONRPC ,jsonrpc-client ,json ,id (LAMBDA (,incoming-channel) ,@body)))
+(defmacro with-jsonrpc ((incoming-channel jsonrpc-client json id progress-token) &body body)
+  "Sends a JSON message (`json`) with the given `id` to the `jsonrpc-client`. Executes `BODY` with `incoming-channel` bound to a dedicated channel for receiving the server's response to this request. Ensures the incoming channel is properly managed."
+  `(%CALL-WITH-JSONRPC ,jsonrpc-client ,json ,id ,progress-token (LAMBDA (,incoming-channel) ,@body)))
 
 (defun depaginate (first-page remaining-pages)
+  "Combines `first-page` and `remaining-pages` into a single object. For each unique key, values are merged as follows: if both values are lists, they are appended. If only one page has a value, that value is used. If both pages have non-list values, or one is a list and the other is not, the value from `first-page` is currently preferred. This behavior may lead to data loss from `remaining-pages` for non-list values."
   (map 'list (lambda (key)
                (cons key
                      (let ((first-value (funcall (object-ref-function key) first-page))
                            (more-values (funcall (object-ref-function key) remaining-pages)))
                        (cond ((null more-values) first-value)
-                             ((and (or (null first-value) (consp first-value))
-                                   (or (null more-values) (consp more-values)))
+                             ((null first-value) more-values)
+                             ((and (consp first-value)
+                                   (consp more-values))
                               (append first-value more-values))
+                             ((consp first-value) (append first-value (list more-values)))
+                             ((consp more-values) (cons first-value more-values))
                              (t first-value)))))
        (remove-duplicates
         (append (keys first-page)
                 (keys remaining-pages))
         :test #'equal)))
 
-(defun jsonrpc (jsonrpc-client method params)
+(defun jsonrpc (jsonrpc-client method params progress-token)
+  "Sends a JSON-RPC request to the server with the given `method` and `params`. Handles automatic pagination by recursively fetching subsequent pages if a `next-cursor` is present in the response. Combines paginated results using `depaginate`. Signals a Lisp error if the server returns a JSON-RPC error."
+  (check-type jsonrpc-client jsonrpc-client)
   (let next-page ((id (random-id))
                   (cursor nil))
     (with-jsonrpc (incoming-channel
@@ -351,9 +416,11 @@
                                              ((alist? params)
                                               (acons :cursor cursor params))
                                              ((hash-table-p params)
-                                              (setf (gethash :cursor params) cursor)
-                                              params))))
-                   id)
+                                              (let ((new-params (alexandria:copy-hash-table params)))
+                                                (setf (gethash :cursor new-params) cursor)
+                                                new-params)))))
+                   id
+                   progress-token)
 
       (let* ((response (chanl:recv incoming-channel))
              (err (get-error response))

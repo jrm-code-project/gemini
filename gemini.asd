@@ -24,6 +24,20 @@
   :components ((:file "analyze"   :depends-on ("gemini" "object" "package" "vars"))
                (:file "asdfx"     :depends-on ("package"))
                (:file "blogger"   :depends-on ("gemini" "object" "package" "vars"))
+               ;; loads last
+               (:file "config"    :depends-on ("analyze"
+                                               "asdfx"
+                                               "blogger"
+                                               "debug"
+                                               "functions"
+                                               "gemini"
+                                               "jsonrpc"
+                                               "llm-repl"
+                                               "mcp"
+                                               "misc"
+                                               "object"
+                                               "package"
+                                               "vars"))
                (:file "debug"     :depends-on ("gemini" "misc" "object" "package" "vars"))
                (:file "functions" :depends-on ("asdfx" "mcp" "misc" "object" "package" "vars"))
                (:file "gemini"    :depends-on ("functions" "mcp" "misc" "object" "package" "vars"))

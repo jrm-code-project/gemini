@@ -52,10 +52,10 @@
   (force (delayed-prompts object)))
 
 (defmethod get-prompt ((object mcp-server) name)
-  (jsonrpc (jsonrpc-client object) "prompts/get" (object :name name)))
+  (jsonrpc (jsonrpc-client object) "prompts/get" (object :name name) nil))
 
 (defmethod read-resource ((object mcp-server) uri)
-  (let ((contents (get-contents (jsonrpc (jsonrpc-client object) "resources/read" (object :uri uri)))))
+  (let ((contents (get-contents (jsonrpc (jsonrpc-client object) "resources/read" (object :uri uri) nil))))
     (cond ((and (consp contents)
                 (null (cdr contents)))
            (let* ((resource-spec (car contents))
@@ -110,7 +110,7 @@
 (defun subscribe-to-resource (mcp-server resource-uri receiver)
   "Subscribe to a resource URI in the MCP server."
   (setf (gethash resource-uri (resource-subscriptions mcp-server)) receiver)
-  (jsonrpc (jsonrpc-client mcp-server) "resources/subscribe" (object :uri resource-uri)))
+  (jsonrpc (jsonrpc-client mcp-server) "resources/subscribe" (object :uri resource-uri) nil))
 
 (defmethod get-system-instruction ((object mcp-server))
   (get-system-instruction (config object)))
@@ -122,19 +122,11 @@
   (print-unreadable-object (server stream :type t)
     (format stream "~a" (get-name server))))
 
-(defparameter +mcp-server-timeout+ (* 5 60)
-  "Timeout in seconds for MCP server responsiveness.")
-
 (defun mcp-server-alive? (mcp-server)
-  (< (get-universal-time)
-     (+ (latest-server-output (jsonrpc-client mcp-server))
-        +mcp-server-timeout+)))
+  (jsonrpc-client-alive? (jsonrpc-client mcp-server)))
 
 (defun find-mcp-server (name)
   (find name *mcp-servers* :key #'get-name :test #'equal))
-
-(defparameter +default-keepalive-interval+ 30
-  "Default keepalive interval in seconds.")
 
 (defun create-mcp-server (name config)
   (letrec ((server
@@ -143,17 +135,17 @@
              :config config
              :delayed-prompts   (delay
                                  (when (prompts-capability server)
-                                   (get-prompts (jsonrpc jsonrpc-clnt "prompts/list" '()))))
+                                   (get-prompts (jsonrpc jsonrpc-clnt "prompts/list" '() nil))))
              :delayed-resources (delay
                                  (when (resources-capability server)
-                                   (get-resources (jsonrpc jsonrpc-clnt "resources/list" '()))))
+                                   (get-resources (jsonrpc jsonrpc-clnt "resources/list" '() nil))))
              :delayed-resource-templates (delay
                                           (when (resources-capability server)
                                             (get-resource-templates
-                                             (jsonrpc jsonrpc-clnt "resources/templates/list" '()))))
+                                             (jsonrpc jsonrpc-clnt "resources/templates/list" '() nil))))
              :delayed-tools     (delay
                                  (when (tools-capability server)
-                                   (get-tools (jsonrpc jsonrpc-clnt "tools/list" '()))))
+                                   (get-tools (jsonrpc jsonrpc-clnt "tools/list" '() nil))))
              :name name))
 
            (jsonrpc-clnt
@@ -208,7 +200,7 @@
                    :protocol-version *mcp-protocol-version*))
 
          (server-initialization-info
-           (prog1 (jsonrpc (jsonrpc-client mcp-server) "initialize" client-initialization-info)
+           (prog1 (jsonrpc (jsonrpc-client mcp-server) "initialize" client-initialization-info nil)
              (chanl:send (outgoing-channel (jsonrpc-client mcp-server))
                          (object :jsonrpc "2.0"
                                  :method "notifications/initialized"))))
@@ -226,7 +218,9 @@
 
          (server-instructions (get-server-instructions server-initialization-info)))
 
-    (format t "~&MCP Server ~a~%" (dehashify server-initialization-info))
+    (format t "~&MCP Server ~a, ~a~%" server-name server-version)
+    (format t "~@[~&  Title: ~a~%~]" server-title)
+    (format t "~&  Protocol Version: ~a~%" protocol-version)
 
     (setf (completions-capability mcp-server) (get-completions capabilities)
           (logging-capability     mcp-server) (get-logging     capabilities)
@@ -239,15 +233,30 @@
           (get-title mcp-server)   server-title
           (get-version mcp-server) server-version
           (get-server-instructions mcp-server) server-instructions)
+    (format t "~&  Capabilities:~%")
+    (when (completions-capability mcp-server)
+      (format t "~&    Completions~%"))
+    (when (logging-capability mcp-server)
+      (format t "~&    Logging~%"))
     (when (prompts-capability mcp-server)
-      (setf (prompts-list-changed-capability mcp-server) (get-list-changed (get-prompts capabilities))))
+      (format t "~&    Prompts~%")
+      (setf (prompts-list-changed-capability mcp-server) (get-list-changed (get-prompts capabilities)))
+      (when (prompts-list-changed-capability mcp-server)
+        (format t "~&      List Changed~%")))
     (when (resources-capability mcp-server)
+      (format t "~&    Resources~%")
+      (setf (resources-list-changed-capability mcp-server) (get-list-changed (get-resources capabilities)))
+      (when (resources-list-changed-capability mcp-server)
+        (format t "~&      List Changed~%"))
       (setf (resources-subscribe-capability mcp-server) (get-subscribe (get-resources capabilities)))
-      (setf (resources-list-changed-capability mcp-server) (get-list-changed (get-resources capabilities))))
+      (when (resources-subscribe-capability mcp-server)
+        (format t "~&      Subscribe~%")))
     (when (tools-capability mcp-server)
+      (format t "~&    Tools~%")
       (setf (tools-list-changed-capability mcp-server) (get-list-changed (get-tools capabilities))))
          
-    (format t "~&MCP Server ~a initialized.~%" server-name)))
+    (format t "~&MCP Server ~a initialized.~%" server-name)
+    (finish-output)))
 
 (defun handle-elicitation (server message)
   (format t "~&~s~%" message)
@@ -321,7 +330,7 @@
    (object :jsonrpc "2.0"
            :id (get-id message)
            :result (object :roots
-                           (vector (object :uri "file:///home/jrm/gemini"
+                           (vector (object :uri "file://home/jrm/Gemini"
                                            :name "Gemini"))))))
 
 (defun handle-sampling-create-message (server message)
@@ -382,17 +391,23 @@
 (eval-when (:load-toplevel :execute)
   (start-mcp-servers))
 
+(defun restart-mcp-servers ()
+  (setq *mcp-servers* nil)
+  (start-mcp-servers))
+
 (defun find-tool (mcp-server tool-name)
   "Find a tool by name in the MCP server."
   (find tool-name (get-tools mcp-server) :test #'equal :key #'get-name))
 
 (defun call-tool (mcp-server tool params)
-  (jsonrpc (jsonrpc-client mcp-server)
-           "tools/call" (object :_meta (object :progress-token (format nil "~aProgress" (get-name tool)) )
-                                :name (get-name tool)
-                                :arguments (or params
-                                               jsonx:+json-empty-object+)
-                                )))
+  (let ((progress-token (format nil "~aProgress-~a" (get-name tool) (random-id 8))))
+    (jsonrpc (jsonrpc-client mcp-server)
+             "tools/call"
+             (object :_meta (object :progress-token progress-token)
+                     :name (get-name tool)
+                     :arguments (or params
+                                    jsonx:+json-empty-object+))
+             progress-token)))
 
 (defun test-tools ()
   (let ((server (find-mcp-server "Everything")))
