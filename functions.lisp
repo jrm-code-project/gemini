@@ -2,6 +2,15 @@
 
 (in-package "GEMINI")
 
+(defun handle-tilde (namestring)
+  (cond ((string= namestring "~")
+         (namestring (user-homedir-pathname)))
+        ((str:starts-with? "~/" namestring)
+         (concatenate 'string
+                      (namestring (user-homedir-pathname))
+                      (subseq namestring 2)))
+        (t namestring)))
+
 (defun standard-functions-and-handlers ()
   "Return a list of standard functions and their handlers."
   (append
@@ -30,6 +39,27 @@
          :behavior :blocking
          :response (schema :type :string))
         #'uiop:architecture))
+
+     (when *enable-gnutils*
+       (cons
+        (function-declaration
+         :name "awk"
+         :description "Runs the awk command and returns the output as a string.  Use this command transform structured files."
+         :behavior :blocking
+         :parameters (schema :type :object
+                             :properties (object :arguments
+                                                 (schema :type :array
+                                                         :items (schema :type :string)
+                                                         :description "The arguments to pass to the awk command."))
+                             :required (vector :arguments))
+         :response (schema :type :string
+                           :description "The standard output of the command, or an error message if the command failed."))
+        (lambda (&key arguments)
+          (uiop:run-program
+           (cons "awk" (coerce arguments 'list))
+           :output :string
+           :error-output :string
+           :ignore-error-status t))))
 
      (when *enable-bash*
        (cons
@@ -79,6 +109,50 @@ This `bash` access empowers you to perform a wide array of system-level operatio
      (when *enable-lisp-introspection*
        (cons
         (function-declaration
+         :name "booleanp"
+         :description "Predicate to check if the value of a symbol is a boolean in the Lisp environment."
+         :behavior :blocking
+         :parameters (schema :type :object
+                             :properties (object :symbol
+                                                 (schema :type :string
+                                                         :description "The name of the symbol to check."))
+                             :required (vector :symbol))
+         :response (schema :type :boolean))
+        (lambda (&key symbol)
+          (let ((sym (find-symbol (string-upcase symbol))))
+            (if (and sym
+                     (boundp sym))
+                (if (or (eq (symbol-value sym) 't)
+                        (eq (symbol-value sym) 'nil))
+                    jsonx:+json-true+
+                    jsonx:+json-false+)
+                jsonx:+json-false+)))))
+
+     (when *enable-lisp-introspection*
+       (cons
+        (function-declaration
+         :name "boundp"
+         :description "Checks if a symbol is bound to a value in the Lisp environment."
+         :behavior :blocking
+         :parameters (schema :type :object
+                             :properties (object :symbol
+                                                 (schema :type :string
+                                                         :description "The name of the symbol to check."))
+                             :required (vector :symbol))
+         :response (schema :type :boolean))
+        (lambda (&key symbol)
+          (let* ((name (string-upcase symbol))
+                 (sym (find-symbol name)))
+            (if (or (and sym
+                         (boundp sym))
+                    (and (not sym)
+                         (string-equal name "NIL")))
+                jsonx:+json-true+
+                jsonx:+json-false+)))))
+
+     (when *enable-lisp-introspection*
+       (cons
+        (function-declaration
          :name "checkLispSyntax"
          :description "Returns true if the given expression is a syntactically correct and complete Lisp expression.  Returns false if the expression is incomplete or has a syntax error."
          :behavior :blocking
@@ -100,6 +174,52 @@ This `bash` access empowers you to perform a wide array of system-level operatio
                       jsonx:+json-false+)))
             (error () jsonx:+json-false+)))))
 
+     (when *enable-file-system*
+       (cons
+        (function-declaration
+         :name "createDirectory"
+         :description "Creates a directory or folder at the specified path.  This is the preferred way to create a directory, as it will create any necessary parent directories as well."
+         :behavior :blocking
+         :parameters (schema :type :object
+                             :properties (object :directory
+                                                 (schema :type :string
+                                                         :description "The directory to create."))
+                             :required (vector :directory))
+         :response (schema :type :string))
+        (lambda (&key directory)
+          (ensure-directories-exist (parse-namestring (handle-tilde directory))))))
+
+     (when *enable-gnutils*
+       (cons
+        (function-declaration
+         :name "curl"
+         :description "Runs the curl command and returns the output as a string.  Use this command to fetch http pages with complex parameters."
+         :behavior :blocking
+         :parameters (schema :type :object
+                             :properties (object :arguments
+                                                 (schema :type :array
+                                                         :items (schema :type :string)
+                                                         :description "The arguments to pass to the curl command."))
+                             :required (vector :arguments))
+         :response (schema :type :string
+                           :description "The standard output of the command, or an error message if the command failed."))
+        (lambda (&key arguments)
+          (uiop:run-program
+           (cons "curl" (coerce arguments 'list))
+           :output :string
+           :error-output :string
+           :ignore-error-status t))))
+
+     (when *enable-file-system*
+       (cons
+        (function-declaration
+         :name "currentDirectory"
+         :description "Returns the current directory pathname.  This is the preferred way to get the current directory, as it will return the directory in a consistent format across different operating systems."
+         :behavior :blocking
+         :response (schema :type :string))
+        (lambda ()
+          (namestring *default-pathname-defaults*))))
+
      (when *enable-lisp-introspection*
        (cons
         (function-declaration
@@ -119,26 +239,6 @@ This `bash` access empowers you to perform a wide array of system-level operatio
                 (with-output-to-string (*standard-output*)
                   (describe sym))
                 "Error: Symbol not found.")))))
-
-     (when *enable-file-system*
-       (cons
-        (function-declaration
-         :name "listDirectory"
-         :description "Returns a list of files in the given directory or folder."
-         :behavior :blocking
-         :parameters (schema :type :object
-                             :properties (object :directory
-                                                 (schema :type :string
-                                                         :description "The directory to list the files of."))
-                             :required (vector :directory))
-         :response (schema :type :array
-                           :items (schema :type :string)))
-        (lambda (&key directory)
-          (map 'vector #'namestring
-               (directory
-                (merge-pathnames (make-pathname :name :wild
-                                                :type :wild)
-                                 (ensure-directory-pathname directory)))))))
 
      (when *enable-eval*
        (cons
@@ -181,43 +281,6 @@ This `bash` access empowers you to perform a wide array of system-level operatio
                       (error "End of expression reached early.  Check your expression.  Parentheses **must** be balanced."))))
                 "**Evaluation rejected by the user.**")))))
 
-     (when *enable-web-functions*
-       (cons
-        (function-declaration
-         :name "httpGet"
-         :description "Performs an HTTP GET request to the specified URL and returns the response body as a string."
-         :behavior :blocking
-         :parameters (schema :type :object
-                             :properties (object :url
-                                                 (schema :type :string
-                                                         :description "The URL to send the GET request to."))
-                             :required (vector :url))
-         :response (schema :type :string))
-        (lambda (&key url)
-          (dexador:get url))))
-
-     (when *enable-lisp-introspection*
-       (cons
-        (function-declaration
-         :name "boundp"
-         :description "Checks if a symbol is bound to a value in the Lisp environment."
-         :behavior :blocking
-         :parameters (schema :type :object
-                             :properties (object :symbol
-                                                 (schema :type :string
-                                                         :description "The name of the symbol to check."))
-                             :required (vector :symbol))
-         :response (schema :type :boolean))
-        (lambda (&key symbol)
-          (let* ((name (string-upcase symbol))
-                 (sym (find-symbol name)))
-            (if (or (and sym
-                         (boundp sym))
-                    (and (not sym)
-                         (string-equal name "NIL")))
-                jsonx:+json-true+
-                jsonx:+json-false+)))))
-
      (when *enable-lisp-introspection*
        (cons
         (function-declaration
@@ -237,27 +300,97 @@ This `bash` access empowers you to perform a wide array of system-level operatio
                 jsonx:+json-true+
                 jsonx:+json-false+)))))
 
-     (when *enable-lisp-introspection*
+     (when *enable-gnutils*
        (cons
         (function-declaration
-         :name "booleanp"
-         :description "Predicate to check if the value of a symbol is a boolean in the Lisp environment."
+         :name "find"
+         :description "Runs the find command and returns the output as a string.  Use this command to search the file system."
          :behavior :blocking
          :parameters (schema :type :object
-                             :properties (object :symbol
+                             :properties (object :arguments
+                                                 (schema :type :array
+                                                         :items (schema :type :string)
+                                                         :description "The arguments to pass to the find command."))
+                             :required (vector :arguments))
+         :response (schema :type :string
+                           :description "The standard output of the command, or an error message if the command failed."))
+        (lambda (&key arguments)
+          (uiop:run-program
+           (cons "find" (coerce arguments 'list))
+           :output :string
+           :error-output :string
+           :ignore-error-status t))))
+
+     (cons
+      (function-declaration
+       :name "getenv"
+       :description "Returns the value of an environment variable."
+       :behavior :blocking
+       :parameters (schema :type :object
+                           :properties (object :variable
+                                               (schema :type :string
+                                                       :description "The name of the environment variable to get."))
+                           :required (vector :variable))
+       :response (schema :type :string))
+      (lambda (&key variable)
+        (uiop:getenv variable)))
+
+     (when *enable-file-system*
+       (cons
+        (function-declaration
+         :name "git"
+         :description "Runs a git command and returns the output as a string.  Use this command to interact with git repositories.  You can read and write files, create branches, commit changes, and push to remote repositories as needed."
+         :behavior :blocking
+         :parameters (schema :type :object
+                             :properties (object :arguments
+                                                 (schema :type :array
+                                                         :items (schema :type :string)
+                                                         :description "The arguments to pass to the git command."))
+                             :required (vector :arguments))
+         :response (schema :type :string
+                           :description "The standard output of the command, or an error message if the command failed."))
+        (lambda (&key arguments)
+          (uiop:run-program
+           (cons "git" (coerce arguments 'list))
+           :output :string
+           :error-output :string
+           :ignore-error-status t))))
+
+     (when *enable-gnutils*
+       (cons
+        (function-declaration
+         :name "grep"
+         :description "Runs the grep command and returns the output as a string.  Use this command to search for files with a certain regular expression."
+         :behavior :blocking
+         :parameters (schema :type :object
+                             :properties (object :arguments
+                                                 (schema :type :array
+                                                         :items (schema :type :string)
+                                                         :description "The arguments to pass to the grep command."))
+                             :required (vector :arguments))
+         :response (schema :type :string
+                           :description "The standard output of the command, or an error message if the command failed."))
+        (lambda (&key arguments)
+          (uiop:run-program
+           (cons "grep" (coerce arguments 'list))
+           :output :string
+           :error-output :string
+           :ignore-error-status t))))
+
+     (when *enable-web-functions*
+       (cons
+        (function-declaration
+         :name "httpGet"
+         :description "Performs an HTTP GET request to the specified URL and returns the response body as a string."
+         :behavior :blocking
+         :parameters (schema :type :object
+                             :properties (object :url
                                                  (schema :type :string
-                                                         :description "The name of the symbol to check."))
-                             :required (vector :symbol))
-         :response (schema :type :boolean))
-        (lambda (&key symbol)
-          (let ((sym (find-symbol (string-upcase symbol))))
-            (if (and sym
-                     (boundp sym))
-                (if (or (eq (symbol-value sym) 't)
-                        (eq (symbol-value sym) 'nil))
-                    jsonx:+json-true+
-                    jsonx:+json-false+)
-                jsonx:+json-false+)))))
+                                                         :description "The URL to send the GET request to."))
+                             :required (vector :url))
+         :response (schema :type :string))
+        (lambda (&key url)
+          (dexador:get url))))
 
      (when (and *enable-web-search*
                 (google:hyperspec-search-engine-id)
@@ -315,25 +448,46 @@ This `bash` access empowers you to perform a wide array of system-level operatio
                 jsonx:+json-true+
                 jsonx:+json-false+)))))
 
-     (when *enable-lisp-introspection*
+     (when *enable-gnutils*
        (cons
         (function-declaration
-         :name "stringp"
-         :description "Predicate to check if the value of a symbol is a string in the Lisp environment."
+         :name "jq"
+         :description "Runs the jq command and returns the output as a string.  Use this command to parse JSON objects."
          :behavior :blocking
          :parameters (schema :type :object
-                             :properties (object :symbol
+                             :properties (object :arguments
+                                                 (schema :type :array
+                                                         :items (schema :type :string)
+                                                         :description "The arguments to pass to the jq command."))
+                             :required (vector :arguments))
+         :response (schema :type :string
+                           :description "The standard output of the command, or an error message if the command failed."))
+        (lambda (&key arguments)
+          (uiop:run-program
+           (cons "jq" (coerce arguments 'list))
+           :output :string
+           :error-output :string
+           :ignore-error-status t))))
+
+     (when *enable-file-system*
+       (cons
+        (function-declaration
+         :name "listDirectory"
+         :description "Returns the files in the given directory or folder as a list of strings.  This is the preferred way to determine the contents of a directory.  Only returns a list of strings, does not print the files."
+         :behavior :blocking
+         :parameters (schema :type :object
+                             :properties (object :directory
                                                  (schema :type :string
-                                                         :description "The name of the symbol to check."))
-                             :required (vector :symbol))
-         :response (schema :type :boolean))
-        (lambda (&key symbol)
-          (let ((sym (find-symbol (string-upcase symbol))))
-            (if (and sym
-                     (boundp sym)
-                     (stringp (symbol-value sym)))
-                jsonx:+json-true+
-                jsonx:+json-false+)))))
+                                                         :description "The directory to list the files of."))
+                             :required (vector :directory))
+         :response (schema :type :array
+                           :items (schema :type :string)))
+        (lambda (&key directory)
+          (map 'vector #'namestring
+               (directory
+                (merge-pathnames (make-pathname :name :wild
+                                                :type :wild)
+                                 (ensure-directory-pathname (handle-tilde directory))))))))
 
      (when *enable-lisp-introspection*
        (cons
@@ -427,7 +581,7 @@ This `bash` access empowers you to perform a wide array of system-level operatio
         (let ((long-name (long-site-name)))
           (if (stringp long-name)
               long-name
-              "Unknown")))) 
+              "Unknown"))))
 
      (cons
       (function-declaration
@@ -436,7 +590,7 @@ This `bash` access empowers you to perform a wide array of system-level operatio
                         "Returns the name of the machine.")
        :behavior :blocking
        :response (schema :type :string))
-      #'machine-instance)
+      #'machine-instance) 
 
      (cons
       (function-declaration
@@ -540,7 +694,7 @@ This `bash` access empowers you to perform a wide array of system-level operatio
      (cons
       (function-declaration
        :name "print"
-       :description "Print a string for display to the user."
+       :description "Print a string.  Use this to display output to the user."
        :behavior :blocking
        :parameters (schema :type :object
                            :properties (object :string
@@ -548,7 +702,7 @@ This `bash` access empowers you to perform a wide array of system-level operatio
                                                        :description "The string to print."))
                            :required (vector :string)))
       (lambda (&key string)
-        (print string)
+        (princ string)
         (values)))
 
      (when *enable-lisp-introspection*
@@ -569,6 +723,21 @@ This `bash` access empowers you to perform a wide array of system-level operatio
             (if (and sym (boundp sym))
                 (format nil "~s" (symbol-value sym))
                 "")))))
+
+     (when *enable-file-system*
+       (cons
+        (function-declaration
+         :name "probeFile"
+         :description "Checks for the existence of a file or directory.  This is the preferred way to check if a file or directory exists."
+         :behavior :blocking
+         :parameters (schema :type :object
+                             :properties (object :directory
+                                                 (schema :type :string
+                                                         :description "The pathname to probe."))
+                             :required (vector :directory))
+         :response (schema :type :string))
+        (lambda (&key directory)
+          (probe-file (parse-namestring (handle-tilde directory))))))
 
      (when *enable-interaction*
        (cons
@@ -624,23 +793,60 @@ This `bash` access empowers you to perform a wide array of system-level operatio
                   0))
             0)))
 
+     (when *enable-file-system*
+       (cons
+        (function-declaration
+         :name "readFileLines"
+         :description "Returns the lines of a file as a vector of strings.  This is the preferred way to read the contents of a file."
+         :behavior :blocking
+         :parameters (schema :type :object
+                             :properties (object :pathname
+                                                 (schema :type :string
+                                                         :description "The pathname of the file to read."))
+                             :required (vector :pathname))
+         :response (schema :type :array
+                           :items (schema :type :string)))
+        (lambda (&key pathname)
+          (format *trace-output* "~&Reading file: ~a~%" (handle-tilde pathname))
+          (finish-output *trace-output*)
+          (collect 'vector
+            (scan-file (handle-tilde pathname) #'read-line)))))
+
+     (when *enable-gnutils*
+       (cons
+        (function-declaration
+         :name "sed"
+         :description "Runs the sed command and returns the output as a string.  Use this command to edit files."
+         :behavior :blocking
+         :parameters (schema :type :object
+                             :properties (object :arguments
+                                                 (schema :type :array
+                                                         :items (schema :type :string)
+                                                         :description "The arguments to pass to the sed command."))
+                             :required (vector :arguments))
+         :response (schema :type :string
+                           :description "The standard output of the command, or an error message if the command failed."))
+        (lambda (&key arguments)
+          (uiop:run-program
+           (cons "sed" (coerce arguments 'list))
+           :output :string
+           :error-output :string
+           :ignore-error-status t))))
+
      (cons
       (function-declaration
-       :name "readFileLines"
-       :description "Returns the lines of a file as a vector of strings."
+       :name "setTopic"
+       :description "Sets the current topic of conversation.  Use this to change the topic of conversation with the LLM."
        :behavior :blocking
        :parameters (schema :type :object
-                           :properties (object :file
+                           :properties (object :topic
                                                (schema :type :string
-                                                       :description "The path to the file to read."))
-                           :required (vector :file))
-       :response (schema :type :array
-                         :items (schema :type :string)))
-      (lambda (&key file)
-        (format *trace-output* "~&Reading file: ~a~%" file)
-        (finish-output *trace-output*)
-        (collect 'vector
-          (scan-file file #'read-line))))
+                                                       :description "The new topic of conversation."))
+                           :required (vector :topic))
+       :response (schema :type :string))
+      (lambda (&key topic)
+        (setf (current-topic) topic)
+        topic))
 
      (cons
       (function-declaration
@@ -654,6 +860,26 @@ This `bash` access empowers you to perform a wide array of system-level operatio
           (if (stringp short-name)
               short-name
               "Unknown"))))
+
+     (when *enable-lisp-introspection*
+       (cons
+        (function-declaration
+         :name "stringp"
+         :description "Predicate to check if the value of a symbol is a string in the Lisp environment."
+         :behavior :blocking
+         :parameters (schema :type :object
+                             :properties (object :symbol
+                                                 (schema :type :string
+                                                         :description "The name of the symbol to check."))
+                             :required (vector :symbol))
+         :response (schema :type :boolean))
+        (lambda (&key symbol)
+          (let ((sym (find-symbol (string-upcase symbol))))
+            (if (and sym
+                     (boundp sym)
+                     (stringp (symbol-value sym)))
+                jsonx:+json-true+
+                jsonx:+json-false+)))))
 
      (when *enable-lisp-introspection*
        (cons
@@ -763,6 +989,16 @@ This `bash` access empowers you to perform a wide array of system-level operatio
         (lambda ()
           (mapcar #'ql-dist:name (ql:system-list)))))
 
+     (when *enable-file-system*
+       (cons
+        (function-declaration
+         :name "userHomeDirectory"
+         :description "Returns the user's home directory pathname.  This is the preferred way to find the user's home directory."
+         :behavior :blocking
+         :response (schema :type :string))
+        (lambda ()
+          (namestring (user-homedir-pathname)))))
+
      (when (and *enable-web-search*
                 (google:google-search-engine-id)
                 (google:search-engine-api-key))
@@ -799,32 +1035,38 @@ This `bash` access empowers you to perform a wide array of system-level operatio
                         (google:web-search
                          (str:join "+" (str:split " " search-terms :omit-nulls t)))))))))
 
-     (cons
-      (function-declaration
-       :name "writeFileLines"
-       :description "Write a vector of strings to a file."
-       :behavior :blocking
-       :parameters (schema :type :object
-                           :properties (object :file
-                                               (schema :type :string
-                                                       :description "The path to the file to read.")
-                                               :lines
-                                               (schema :type :array
-                                                       :items (schema :type :string)
-                                                       :description "The lines to write to the file."))
-                            :required (vector :file :lines)))
-      (lambda (&key file lines)
-        (handler-case
-            (progn
-              (format *trace-output* "~&Writing file: ~a~%" file)
-              (finish-output *trace-output*)
-              (ensure-directories-exist file)
-              (format *trace-output* "~&Directories exist: ~a~%" file)
-              (finish-output *trace-output*)
-              (backup-file file)
-              (collect-file file (scan 'vector lines) #'write-line))
-          (error (e)
-            (format *trace-output* "~&Error writing file ~a: ~a~%" file e)))))
+     (when *enable-file-system*
+       (cons
+        (function-declaration
+         :name "writeFileLines"
+         :description "Write a vector of strings to a file.  This is the preferred way to write the contents of a file."
+         :behavior :blocking
+         :parameters (schema :type :object
+                             :properties (object :file
+                                                 (schema :type :string
+                                                         :description "The path to the file to read.")
+                                                 :lines
+                                                 (schema :type :array
+                                                         :items (schema :type :string)
+                                                         :description "The lines to write to the file."))
+                             :required (vector :file :lines)))
+        (lambda (&key file lines)
+          (let ((file* (handle-tilde file)))
+            (handler-case
+                (progn
+                  (format *trace-output* "~&Writing file: ~a~%" file*)
+                  (finish-output *trace-output*)
+                  (ensure-directories-exist file*)
+                  (format *trace-output* "~&Directories exist: ~a~%" file*)
+                  (finish-output *trace-output*)
+                  (backup-file file*)
+                  (with-open-file (stream file* :direction :output :if-does-not-exist :create :if-exists :supersede :element-type 'character)
+                    (dolist (line (coerce lines 'list))
+                      (write-line line stream)
+                      (terpri stream))
+                    (terpri stream)))
+              (error (e)
+                (format *trace-output* "~&Error writing file ~a: ~a~%" file* e)))))))
 
      (when *enable-interaction*
        (cons

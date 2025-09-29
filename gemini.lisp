@@ -29,6 +29,35 @@
         (format *trace-output* "~&;; Gemini API ~:[finished in~;aborted after~] ~,2f seconds.~%" aborted
                 elapsed-time)))))
 
+(defun file->part (path &key (mime-type (guess-mime-type path)))
+  "Reads a file from PATH, base64 encodes its content, and returns a content PART object
+   suitable for the Gemini API."
+  (part
+   (object
+    :data (file->blob path)
+    :mime-type mime-type)))
+
+(defun prepare-file-parts (files)
+  "Converts a list of file specifications into a list of PART objects.
+   Each element in FILES should be a path string or a list (PATH &optional MIME-TYPE)."
+  (map nil (lambda (file-spec)
+             (destructuring-bind (path &optional mime-type)
+                    (if (listp file-spec) file-spec (list file-spec))
+               (file->part path :mime-type mime-type)))
+       files))
+
+(defun merge-user-prompt-and-files (prompt-contents file-parts)
+  "Merges file-parts into the first user content object in the prompt-contents list.
+   If no user content exists, it creates one."
+  (if (and prompt-contents (equal (get-role (car prompt-contents)) "user"))
+      (let* ((first-user-content (car prompt-contents))
+             (existing-parts (coerce (get-parts first-user-content) 'list))
+             (new-parts (append existing-parts file-parts)))
+        (list* (content :parts new-parts :role "user")
+               (cdr prompt-contents)))
+      ;; If the prompt was empty or non-user, create a new user content object.
+      (list (content :parts (append file-parts (list (part "Please analyze the attached files."))) :role "user"))))
+
 (defun get-handler (name function-and-handler-list)
   (cdr (assoc name function-and-handler-list :test #'equal :key #'get-name)))
 
@@ -150,16 +179,18 @@
 (defun default-process-arg-value (arg schema)
   "Processes a single argument value based on the provided schema.
    Returns the processed value according to the type specified in the schema."
-  (ecase (get-type-enum schema)
-    (:array (let ((item-schema (get-items schema)))
-              (map 'vector (lambda (item)
-                             (default-process-arg-value item item-schema))
-                   arg)))
-    (:boolean arg)
-    (:integer (unless (integerp arg) (warn "Expected integer, got ~s" arg)) arg)
-    (:number arg)
-    (:object arg)
-    (:string arg)))
+  (if (null schema)
+      arg
+      (ecase (get-type-enum schema)
+        (:array (let ((item-schema (get-items schema)))
+                  (map 'vector (lambda (item)
+                                 (default-process-arg-value item item-schema))
+                       arg)))
+        (:boolean arg)
+        (:integer (unless (integerp arg) (warn "Expected integer, got ~s" arg)) arg)
+        (:number arg)
+        (:object arg)
+        (:string arg))))
 
 (defun default-process-arg (arg schema)
   "Processes a single argument based on the provided schema.
@@ -202,16 +233,35 @@
                                       ((not (functionp handler))
                                        (object :error (format nil "Handler for `~s` is not a function." name)
                                                 ))
-                                      (t (handler-case
-                                             (let ((answers (multiple-value-list (apply handler arglist))))
+                                      (t 
+                                       (let ((answers nil)
+                                             (output-string nil)
+                                             (error-string nil))
+                                         (handler-case
+                                             (progn
+                                               (setq output-string
+                                                     (with-output-to-string (out)
+                                                       (let ((*standard-output* out))
+                                                         (setq error-string
+                                                               (with-output-to-string (err)
+                                                                 (let ((*error-output* err))
+                                                                   (setq answers (multiple-value-list (apply handler arglist)))))))))
                                                (if (consp answers)
                                                    (if (consp (cdr answers))
                                                        (object :result (car answers)
-                                                               :additional-results (coerce (cdr answers) 'vector))
-                                                       (object :result (car answers)))
-                                                   (object :result jsonx:+json-null+)))
+                                                               :additional-results (coerce (cdr answers) 'vector)
+                                                               :standard-output output-string
+                                                               :error-output error-string)
+                                                       (object :result (car answers)
+                                                               :standard-output output-string
+                                                               :error-output error-string))
+                                                   (object :result jsonx:+json-null+
+                                                           :standard-output output-string
+                                                           :error-output error-string)))
                                            (error (e)
-                                             (object :error (format nil "~a" e))))))))))
+                                             (object :error (format nil "~a" e)
+                                                     :standard-output output-string
+                                                     :error-output error-string))))))))))
       ;; (format *trace-output* "~&;; Function call response: ~s~%" (dehashify response))
       response)))
 
@@ -248,48 +298,54 @@
          (list (content :parts (mapcar #'part thing) :role "user")))
         (t (error "Unrecognized type for prompt: ~s" thing))))
   
-;; (setq +max-prompt-tokens+ 8192)
-;;   "The maximum number of tokens allowed in the prompt context before compression is needed.")
+(defparameter +max-prompt-tokens+ (expt 2 18)
+  "The maximum number of tokens allowed in the prompt context before compression is needed.")
 
-;; (defun maybe-compress-context (results)
-;;   "Compresses the conversation context if it exceeds the maximum allowed tokens.
-;;    Returns the results unchanged."
-;;   (when (> (get-prompt-token-count (get-usage-metadata results)) +max-prompt-tokens+)
-;;     (format *trace-output* "~&;; Prompt token count exceeds ~d tokens, compressing context.~%" +max-prompt-tokens+)
-;;     (let* ((uncompressed *context*)
-;;            (prompt (car *context*))
-;;            (history (cdr *context*))
-;;            (header (car (reverse history))))
-;;       ;; Ensure the first content in the context is a user message
-;;       ;; This is the prompt that elicited the current response.
-;;       (assert (equal (get-role (car uncompressed)) "user")
-;;               () "The first content in the context must be a user message.")
-;;       ;; Ensure the second content in the context is a model message
-;;       ;; this is the conversation up to the most recent prompt.
-;;       (assert (equal (get-role (cadr uncompressed)) "model")
-;;               () "The second content in the context must be a model message.")
+(defun %count-tokens (model-id payload)
+  "Invokes the Gemini API's countTokens endpoint."
+  (google:google-post
+   (concatenate 'string +gemini-api-base-url+ model-id ":countTokens")
+   (google:gemini-api-key)
+   payload))
 
-;;       (let ((compressed
-;;               (let ((*context* history)
-;;                     (*system-instruction*
-;;                       (content
-;;                        :parts
-;;                        (list (part "You are a world class summarizer.  Your summaries are concise, but thorough, preserving important details and key points.  You use bullet points where appropriate."))
-;;                        :role "system"))
-;;                     (*max-output-tokens* (/ +max-prompt-tokens+ 2)))
-;;                 (let retry ((*temperature* 0.0)
-;;                             (results* nil))
-;;                   (if (or (null results*)
-;;                           (get-error results*))
-;;                       (retry (+ *temperature*
-;;                                 (/ (- 2.0 *temperature*) 8.0))
-;;                              (invoke-gemini "Summarize the conversation so far."))
-;;                       (progn
-;;                         (format *trace-output* "~&;; Context compressed to ~d tokens.~%"
-;;                                 (get-prompt-token-count (get-usage-metadata results*)))
-;;                         results*))))))
-;;         (setq *context* (list prompt compressed header)))))
-;;   results)
+(defun compress-context (&optional (model *model*))
+  "Compresses the global *context* variable by summarizing its middle parts."
+  (let* ((prompt (car *context*))
+         (header (car (last *context*)))
+         (history-to-summarize (butlast (cdr *context*))))
+
+    (when history-to-summarize
+      (assert (string= (get-role prompt) "user"))
+      (assert (string= (get-role header) "model"))
+
+      (format *trace-output* "~&;; Compressing ~d messages.~%" (length history-to-summarize))
+
+      (let ((summarization-payload
+              (object
+               :contents (reverse history-to-summarize)
+               :system-instruction (content
+                                    :parts (list (part "You are a world class summarizer. Your summaries are concise, but thorough, preserving important details and key points. You use bullet points where appropriate."))
+                                    :role "system")
+               :generation-config (object :max-output-tokens (- +max-prompt-tokens+ 2048)))))
+        (let retry ((temp 0.0))
+          (setf (get-temperature (get-generation-config summarization-payload)) temp)
+          (let* ((summary-results (%invoke-gemini model summarization-payload))
+                 (error (get-error summary-results)))
+            (if error
+                (if (< temp 2.0)
+                    (progn
+                      (warn "Summarization failed at temp ~a. Retrying. Error: ~a" temp (get-message error))
+                      (retry (+ temp 0.25)))
+                    (error "Failed to compress context even at max temperature."))
+                (let* ((candidates (get-candidates summary-results))
+                       (first-candidate (when (and candidates (> (length (coerce candidates 'list)) 0)) (elt (coerce candidates 'list) 0)))
+                       (compressed-content (when first-candidate (get-content first-candidate))))
+                  (if compressed-content
+                      (progn
+                        (format *trace-output* "~&;; Context successfully compressed.~%")
+                        (setf (get-role compressed-content) "model")
+                        (setq *context* (list prompt compressed-content header)))
+                      (error "Summarization produced no content."))))))))))
 
 (defun extend-conversation (new-content)
   (push new-content *context*)
@@ -365,6 +421,23 @@
           (setf (get-usage-metadata stripped) (get-usage-metadata results)))
         stripped))))
 
+(defun print-text (results)
+  "Prints the text parts from the results to *trace-output*.
+   Returns the results unchanged."
+  (let ((candidates (get-candidates results)))
+    (when candidates
+      (dolist (candidate (if (consp candidates)
+                             candidates
+                             (and (vectorp candidates)
+                                  (> (length candidates) 0)
+                                  (coerce candidates 'list))))
+        (let ((content (get-content candidate)))
+          (when content
+            (dolist (part (coerce (get-parts content) 'list))
+              (when (text-part? part)
+                (format *trace-output* "~&~a~%" (get-text part)))))))))
+  results)
+
 (defun extract-function-calls-from-candidate (candidate)
   (let ((content (get-content candidate)))
     (when content
@@ -416,7 +489,12 @@
              (get-message (get-error results)))
       results))
 
+(defun debug-response (response)
+  (format *trace-output* "~&;; Full response: ~s~%" (dehashify response))
+  response)
+
 (defparameter *output-processor* (compose #'tail-call-functions
+                                          #'print-text
                                           #'strip-and-print-thoughts
                                           #'print-token-usage
                                           #'extend-conversation-with-first-candidate)
@@ -429,34 +507,67 @@
                      :role "model"))
       *context*))
 
+(defun current-topic ()
+  (let* ((context (or *context* *prior-context*))
+         (first-message (car (last context)))
+         (parts (and first-message (get-parts first-message)))
+         (last-part (and parts (car (last (coerce parts 'list))))))
+    (and last-part (get-text last-part))))
+
+(defun (setf current-topic) (new-topic)
+  (let* ((context (or *context* *prior-context*))
+         (first-message (car (last context)))
+         (parts (and first-message (get-parts first-message)))
+         (last-part (and parts (car (last (coerce parts 'list))))))
+    (when last-part
+      (setf (get-text last-part)
+            (format nil "**The topic of conversation is ~a.**" new-topic)))))
+
 (defun invoke-gemini (prompt &key
                                ((:model *model*) +default-model+)
+                               (files nil)
                                (cached-content (default-cached-content))
                                (generation-config (default-generation-config))
                                (tools (default-tools))
                                (tool-config (default-tool-config))
                                (safety-settings (default-safety-settings))
                                (system-instruction (default-system-instruction)))
-  (let ((prompt* (->prompt prompt)))
-    (assert (list-of-content? prompt*)
+  (let* ((file-parts (when files (prepare-file-parts files)))
+         (prompt-contents-base (->prompt prompt))
+         (prompt-contents (if file-parts
+                              (merge-user-prompt-and-files prompt-contents-base file-parts)
+                              prompt-contents-base)))
+    (assert (list-of-content? prompt-contents)
             () "Prompt must be a list of content objects.")
     (setq *prior-model* *model*)
-    (let* ((*context* (revappend prompt* (current-context)))
+    (let* ((*context* (revappend prompt-contents (current-context)))
            (payload (object :contents (reverse *context*))))
+      ;; Add other payload parts before counting tokens
+      (when cached-content (setf (get-cached-content payload) cached-content))
+      (when generation-config (setf (get-generation-config payload) generation-config))
+      (when safety-settings (setf (get-safety-settings payload) safety-settings))
+      ;; (when system-instruction (setf (get-system-instruction payload) system-instruction))
+      ;; (when tools (setf (get-tools payload) tools))
+      ;; (when (and tools tool-config) (setf (get-tool-config payload) tool-config))
+
+      ;; Check token count and compress if necessary
+      (let* ((token-count-response (%count-tokens *model* payload))
+             (total-tokens (get-total-tokens token-count-response)))
+        (when (> total-tokens +max-prompt-tokens+)
+          (format *trace-output* "~&;; Prompt token count (~d) exceeds ~d tokens, compressing context.~%" total-tokens +max-prompt-tokens+)
+          (compress-context *model*)
+          ;; Rebuild payload with compressed context
+          (setq payload (object :contents (reverse *context*)))
+          ;; Re-add other payload parts
+          (when cached-content (setf (get-cached-content payload) cached-content))
+          (when generation-config (setf (get-generation-config payload) generation-config))
+          (when safety-settings (setf (get-safety-settings payload) safety-settings))))
+      (when system-instruction (setf (get-system-instruction payload) system-instruction))
+      (when tools (setf (get-tools payload) tools))
+      (when (and tools tool-config) (setf (get-tool-config payload) tool-config))
+
       (save-transcript *context*)
       (setq *prior-context* *context*)
-      (when cached-content
-        (setf (get-cached-content payload) cached-content))
-      (when generation-config
-        (setf (get-generation-config payload) generation-config))
-      (when safety-settings
-        (setf (get-safety-settings payload) safety-settings))
-      (when system-instruction
-        (setf (get-system-instruction payload) system-instruction))
-      (when tools
-        (setf (get-tools payload) tools))
-      (when (and tools tool-config)
-        (setf (get-tool-config payload) tool-config))
       (or (funcall (compose *output-processor* #'error-check) (%invoke-gemini *model* payload))
           (reinvoke-gemini)))))
 

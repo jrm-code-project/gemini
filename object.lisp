@@ -123,6 +123,7 @@
   :top-p
   :total
   :total-token-count
+  :total-tokens
   ;; :type
   :uri
   :uri-template

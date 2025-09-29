@@ -360,6 +360,14 @@ Does not add values to ALISTS."
   (sort (remove-duplicates (mappend #'external-variables (filter-package-list)))
         #'string< :key #'symbol-name))
 
+(defun read-file-bytes (pathname)
+  (with-open-file (stream pathname :direction :input :element-type '(unsigned-byte 8) :if-does-not-exist nil)
+    (when stream
+      (let* ((size (file-length stream))
+             (bytes (make-array size :element-type '(unsigned-byte 8))))
+        (read-sequence bytes stream)
+        bytes))))
+
 (defun ensure-directory-pathname (pathname)
   "Ensures that the given PATHNAME ends with a directory separator.
    If PATHNAME is a string, it converts it to a pathname first."
@@ -405,7 +413,7 @@ Does not add values to ALISTS."
   (let ((backup (pathname (concatenate 'string (namestring pathname) suffix))))
     (if (probe-file backup)
         (backup-pathname pathname (next-suffix suffix))
-        (copy-file pathname backup))))
+        backup)))
 
 (defun backup-file (pathname)
   (when (probe-file pathname)
@@ -435,3 +443,32 @@ Does not add values to ALISTS."
              (if (< (car indexes) end-of-file)
                  (reverse (cons (str:trim (subseq text (car indexes) end-of-file)) forms))
                  (reverse forms))))))))
+
+(defun guess-mime-type (path)
+  "Simple helper to guess MIME type based on file extension."
+  (let ((extension (pathname-type path)))
+    (cond 
+      ((string-equal extension "csv")  "text/csv")
+      ((string-equal extension "gif")  "image/gif")
+      ((string-equal extension "html") "text/html")
+      ((string-equal extension "jpeg") "image/jpeg")
+      ((string-equal extension "jpg")  "image/jpeg")
+      ((string-equal extension "json") "application/json")
+      ((string-equal extension "lisp") "text/plain") ; Common Lisp files are plain text
+      ((string-equal extension "pdf")  "application/pdf")
+      ((string-equal extension "png")  "image/png")
+      ((string-equal extension "txt")  "text/plain")
+      ((string-equal extension "webp") "image/webp")
+      ((string-equal extension "xml")  "application/xml")
+      (t "application/octet-stream"))))
+
+(defun file->blob (path)
+  (handler-case
+      (let ((bytes (read-file-bytes path)))
+        (and bytes (cl-base64:usb8-array-to-base64-string bytes)))
+    (file-error (e)
+      (format *error-output* "Error reading file ~a: ~a~%" path e)
+      nil)
+    (error (e)
+      (format *error-output* "Error encoding file ~a: ~a~%" path e)
+      nil)))

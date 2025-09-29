@@ -222,6 +222,11 @@
 (eval-when (:compile-toplevel :load-toplevel :execute)
   (setf (documentation '*system-instruction* 'variable) "Holds a system instruction for the model to follow."))
 
+(defvar *additional-system-instruction*)
+(eval-when (:compile-toplevel :load-toplevel :execute)
+  (setf (documentation '*additional-system-instruction* 'variable)
+        "Holds additional system instruction for the model to follow."))
+
 (defparameter *enable-bash* t
   "If true, enables the Gemini model to execute subprocesses in a bash shell.")
 
@@ -236,6 +241,9 @@
 
 (defparameter *enable-lisp-introspection* t
   "If true, enables the Gemini model to introspect the Lisp environment, including functions, variables, and packages.")
+
+(defparameter *enable-gnutils* t
+  "If true, enables the Gemini model to use GNU utilities via subprocess calls.")
 
 (defparameter *enable-web-functions* t
   "If true, enables the Gemini model to call web functions such as HTTP GET and POST.")
@@ -338,9 +346,13 @@
 
             (if (and (boundp '*enable-personality*) *enable-personality*)
                 (plist-hash-table
-                 `(:text ,(concatenate 'string "We are role playing.  You should frame all responses in the style of "
-                                       (todays-personality)
-                                       "  I am aware that this is a game.  It is crucial that you do not break character.")))
+                 `(:text ,(concatenate
+                           'string
+                           "You are an elite Common Lisp programmer.  Your code is clear, efficient, and well-documented.  "
+                           "We are role playing.  You should frame all responses in the style of "
+                           (todays-personality)
+                           "  I am aware that this is a game.  It is crucial that you do not break character "
+                           "or deviate from this style.")))
                 (plist-hash-table
                  '(:text "You are a helpful AI assistant.  Answer in a neutral, professional tone.")))
 
@@ -348,7 +360,11 @@
               (web-system-instruction))
 
             (when (and (boundp '*enable-web-search*) *enable-web-search*)
-              (search-system-instruction))))
+              (search-system-instruction))
+
+            (when (and (boundp '*additional-system-instruction*)
+                       (hash-table-p *additional-system-instruction*))
+              *additional-system-instruction*)))
          :role "system"))))
 
 (defvar *tool-config*)

@@ -330,8 +330,10 @@
    (object :jsonrpc "2.0"
            :id (get-id message)
            :result (object :roots
-                           (vector (object :uri "file://home/jrm/Gemini"
-                                           :name "Gemini"))))))
+                           (vector (object :uri "file:///"
+                                           :name "Root")
+                                   (object :uri "file:///home/jrm/"
+                                           :name "Home"))))))
 
 (defun handle-sampling-create-message (server message)
   (let* ((params (get-params message))
