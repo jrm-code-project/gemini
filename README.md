@@ -4,9 +4,17 @@ This library provides a Common Lisp interface to Google's Gemini Large Language 
 
 ## Installation
 
+### Manual Installation
+Clone this repository into your local-projects directory:
+```bash
+git clone https://github.com/jrm-code-project/gemini.git ~/quicklisp/local-projects/gemini
+```
+Then load with Quicklisp or ASDF as below.
+
 You can install the `gemini` library using Quicklisp, ASDF, or manually:
 
 ### Using Quicklisp
+Note, this is not part of the Quicklisp distribution, so you must manually install it into your `local-projects`
 ```common-lisp
 (ql:quickload "gemini")
 ```
@@ -15,13 +23,6 @@ You can install the `gemini` library using Quicklisp, ASDF, or manually:
 ```common-lisp
 (asdf:load-system "gemini")
 ```
-
-### Manual Installation
-Clone this repository into your local-projects directory:
-```bash
-git clone https://github.com/jrm-code-project/gemini.git ~/quicklisp/local-projects/gemini
-```
-Then load with Quicklisp or ASDF as above.
 
 ## Setting your GOOGLE_API_KEY API key
 
@@ -46,15 +47,23 @@ You can also set the API key at runtime:
 ## Dependencies
 
 This library depends on:
-- `alexandria`
-- `asdf`
-- `cl-json`
-- `dexador`
-- `fold`
-- `function`
-- `named-let`
-- `trivial-backtrace`
-- `uiop`
+- `alexandria` - Quicklisp
+- `asdf` - Quicklisp
+- `chanl` - Quicklisp
+- `cl-base64` - Quicklisp
+- `cl-json` - Quicklisp
+- `cl-ppcre` - Quicklisp
+- `dexador` - Quicklisp
+- `fold` - jrm-code-project
+- `function` - jrm-code-project
+- `google` - jrm-code-project
+- `jsonx` - jrm-code-project
+- `named-let` - jrm-code-project
+- `promise` - jrm-code-project
+- `series` - Sourceforge (series.sourceforge.net)[https://series.sourceforge.net/]
+- `str` - Quicklisp
+- `trivial-backtrace` - Quicklisp
+- `uiop` - Quicklisp
 
 Ensure these have been quickloaded or are available in your Quicklisp local-projects or via ASDF.
 
@@ -73,8 +82,8 @@ Load the library using Quicklisp or ASDF:
 
 The main exported functions are:
 
-- `gemini:invoke-gemini` — Generate text from a prompt.
-- `gemini:gemini-continue` — Continue a conversation with the Gemini model.
+- `gemini:invoke-gemini` — Generate text from a prompt using a fresh context.
+- `gemini:continue-gemini` — Continue a conversation with the Gemini model using the existing context.
 
 See the source for additional utility functions.
 
@@ -88,13 +97,20 @@ To generate text from a prompt:
 
 ### Continuing a conversation
 ```common-lisp
-(gemini:gemini-continue "What happens next?")
+(gemini:continue-gemini "What happens next?")
 ```
 
 ### Model selection
 ```common-lisp
 (gemini:invoke-gemini "Translate to French: Hello!" :model "gemini-2.5-pro")
 ```
+
+or
+
+```common-lisp
+(setq gemini:+default-model+ "gemini-2.5-pro")
+```
+
 ## Configuration
 
 You can configure the API key and default model using environment variables or files as described above. The following environment variables are supported:
@@ -115,6 +131,7 @@ See `LICENSE` for details. This project is licensed under the MIT License.
 ## Contributing
 
 Pull requests and issues are welcome! Please follow standard Common Lisp style and include tests for new features.
+Please contact me if you have questions or need help.
 
 ## Acknowledgments
 

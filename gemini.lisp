@@ -262,7 +262,7 @@
                                              (object :error (format nil "~a" e)
                                                      :standard-output output-string
                                                      :error-output error-string))))))))))
-      ;; (format *trace-output* "~&;; Function call response: ~s~%" (dehashify response))
+      (format *trace-output* "~&;; Function call response: ~s~%" (dehashify response))
       response)))
 
 (defvar *accumulated-prompt-tokens* 0
