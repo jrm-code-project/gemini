@@ -219,7 +219,8 @@
          (handler (and entry (cdr entry)))
          (arglist (default-process-args args schema)))
     ;; (format *trace-output* "~&;; Processing function call: ~s~%" (dehashify function-call-part))
-    (format *trace-output* "~&;; Invoking function: ~a(~{~a~^, ~})~%" name arglist)
+    ;; (format *trace-output* "~&;; Invoking function: ~a(~{~a~^, ~})~%" name arglist)
+    ;; (force-output *trace-output*)
     (let ((response
             (object :function-response
                      (object 
@@ -241,10 +242,10 @@
                                              (progn
                                                (setq output-string
                                                      (with-output-to-string (out)
-                                                       (let ((*standard-output* out))
+                                                       (let ((*standard-output* (make-broadcast-stream *standard-output* out)))
                                                          (setq error-string
                                                                (with-output-to-string (err)
-                                                                 (let ((*error-output* err))
+                                                                 (let ((*error-output* (make-broadcast-stream *error-output* err)))
                                                                    (setq answers (multiple-value-list (apply handler arglist)))))))))
                                                (if (consp answers)
                                                    (if (consp (cdr answers))
@@ -262,7 +263,8 @@
                                              (object :error (format nil "~a" e)
                                                      :standard-output output-string
                                                      :error-output error-string))))))))))
-      (format *trace-output* "~&;; Function call response: ~s~%" (dehashify response))
+      ;; (format *trace-output* "~&;; Function call response: ~s~%" (dehashify response))
+      ;; (force-output *trace-output*)
       response)))
 
 (defvar *accumulated-prompt-tokens* 0
@@ -555,6 +557,7 @@
              (total-tokens (get-total-tokens token-count-response)))
         (when (> total-tokens +max-prompt-tokens+)
           (format *trace-output* "~&;; Prompt token count (~d) exceeds ~d tokens, compressing context.~%" total-tokens +max-prompt-tokens+)
+          (finish-output *trace-output*)
           (compress-context *model*)
           ;; Rebuild payload with compressed context
           (setq payload (object :contents (reverse *context*)))
@@ -568,40 +571,19 @@
 
       (save-transcript *context*)
       (setq *prior-context* *context*)
-      (or (funcall (compose *output-processor* #'error-check) (%invoke-gemini *model* payload))
-          (reinvoke-gemini)))))
-
-(defun reinvoke-gemini (&key
-                          (reinvocation-count 0)
-                          ((:model *model*) +default-model+)
-                          (cached-content (default-cached-content))
-                          (generation-config (default-generation-config))
-                          (tools (default-tools))
-                          (tool-config (default-tool-config))
-                          (safety-settings (default-safety-settings))
-                          (system-instruction (default-system-instruction)))
-  (let ((payload (object :contents (reverse *prior-context*)))
-        (*temperature* (+ (if (boundp '*temperature*)
-                              (symbol-value '*temperature*)
-                              1)
-                          (/ (- 2.0 (if (boundp '*temperature*)
-                                        (symbol-value '*temperature*)
-                                        1))
-                             8.0))))
-    (when cached-content
-      (setf (get-cached-content payload) cached-content))
-    (when generation-config
-      (setf (get-generation-config payload) generation-config))
-    (when safety-settings
-      (setf (get-safety-settings payload) safety-settings))
-    (when system-instruction
-      (setf (get-system-instruction payload) system-instruction))
-    (when tools
-      (setf (get-tools payload) tools))
-    (when (and tools tool-config)
-      (setf (get-tool-config payload) tool-config))
-    (or (funcall (compose *output-processor* #'error-check) (%invoke-gemini *model* payload))
-        (reinvoke-gemini :reinvocation-count (1+ reinvocation-count)))))
+      (let reinvoke ((count 0)
+                     (temperature (and (get-generation-config payload)
+                                       (get-temperature (get-generation-config payload)))))
+        (if (> count 10)
+            (error "Failed to get a valid response from Gemini after ~d attempts." count)
+            ;; Adjust temperature and retry
+            (progn
+              (and temperature (if (get-generation-config payload)
+                                   (setf (get-temperature (get-generation-config payload)) temperature)
+                                   (setf (get-generation-config payload)
+                                         (object :temperature temperature))))
+              (or (funcall (compose *output-processor* #'error-check) (%invoke-gemini *model* payload))
+                  (reinvoke (+ count 1) (+ (or temperature 1.0) (/ (- 2.0 (or temperature 1.0)) 2.0))))))))))
 
 (defun continue-gemini (content)
   "Continues the conversation with the Gemini model using the provided CONTENT.

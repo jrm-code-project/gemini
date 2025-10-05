@@ -2,6 +2,25 @@
 
 (in-package "GEMINI")
 
+(defun read-full-forms (string)
+  (let ((eof-value (cons nil nil)))
+    (let iter ((forms '())
+               (pos 0))
+      (cond ((= pos (length string))
+             (if (null (cdr forms))
+                 (car forms)
+                 (cons 'progn (reverse forms))))
+            ((or (char= (char string pos) #\Space)
+                 (char= (char string pos) #\Return)
+                 (char= (char string pos) #\Newline)
+                 (char= (char string pos) #\Tab))
+             (iter forms (1+ pos)))
+            (t (multiple-value-bind (form limit)
+                   (read-from-string string nil eof-value :start pos)
+                 (cond ((equal form eof-value)
+                        (error "Could not read a full form from the string starting at position ~d: ~a" pos string))
+                       (t (iter (cons form forms) limit)))))))))
+
 (defun handle-tilde (namestring)
   (cond ((string= namestring "~")
          (namestring (user-homedir-pathname)))
@@ -173,11 +192,10 @@ This `bash` access empowers you to perform a wide array of system-level operatio
                 (let* ((narrow-string (str:trim string))
                        (length (length narrow-string))
                        (*read-eval* nil))
-                  (multiple-value-bind (form count) (read-from-string narrow-string)
-                    (declare (ignore form))
-                    (if (= count length)
-                        jsonx:+json-true+
-                        jsonx:+json-false+)))
+                  (let ((form (read-full-forms narrow-string)))
+                    (if (null form)
+                        jsonx:+json-false+
+                        jsonx:+json-true+)))
               (error () jsonx:+json-false+)))))
 
        (when *enable-file-system*
@@ -250,8 +268,8 @@ This `bash` access empowers you to perform a wide array of system-level operatio
                    (length (length narrow-string)))
               (if (or (eq *enable-eval* :yolo)
                       (yes-or-no-p "May I evaluate ~a?" narrow-string))
-                  (multiple-value-bind (form count) (read-from-string narrow-string)
-                    (if (= count length)
+                  (let ((form (read-full-forms narrow-string)))
+                    (if form
                         (progn
                           (format *trace-output* "~&;; Evaluating: ~s~%" form)
                           (finish-output *trace-output*)
@@ -263,7 +281,6 @@ This `bash` access empowers you to perform a wide array of system-level operatio
                             (values-list values)))
                         (progn
                           (format *trace-output* "~&;; Incomplete expression: ~s~%" narrow-string)
-                          (format *trace-output* "~&;; ~d of ~d characters read.~%" count length)
                           (finish-output *trace-output*)
                           (error "End of expression reached early.  Check your expression.  Parentheses **must** be balanced."))))
                   "**Evaluation rejected by the user.**")))))
@@ -287,7 +304,7 @@ This `bash` access empowers you to perform a wide array of system-level operatio
                   jsonx:+json-true+
                   jsonx:+json-false+)))))
 
-       (guntil "find" "Use this command to search the file system.")
+       (gnutil "find" "Use this command to search the file system.")
 
        (cons
         (function-declaration
@@ -562,14 +579,13 @@ This `bash` access empowers you to perform a wide array of system-level operatio
           (lambda (&key expression)
             (let* ((narrow-string (str:trim expression))
                    (length (length narrow-string)))
-              (multiple-value-bind (form count) (read-from-string narrow-string)
-                (if (= count length)
+              (let ((form (read-full-forms narrow-string)))
+                (if form
                     (let ((expanded (multiple-value-list (macroexpand form))))
                       (format *trace-output* "~{~s~^~%~}" expanded)
                       expanded)
                     (progn
                       (format *trace-output* "~&;; Incomplete expression: ~s~%" narrow-string)
-                      (format *trace-output* "~&;; ~d of ~d characters read.~%" count length)
                       (finish-output *trace-output*)
                       (error "End of expression reached early.  Check your expression.  Parentheses **must** be balanced."))))))))
 
@@ -590,14 +606,13 @@ This `bash` access empowers you to perform a wide array of system-level operatio
           (lambda (&key expression)
             (let* ((narrow-string (str:trim expression))
                    (length (length narrow-string)))
-              (multiple-value-bind (form count) (read-from-string narrow-string)
-                (if (= count length)
+              (let ((form (read-full-forms narrow-string)))
+                (if form
                     (let ((expanded (multiple-value-list (macroexpand-1 form))))
                       (format *trace-output* "~{~s~^~%~}" expanded)
                       expanded)
                     (progn
                       (format *trace-output* "~&;; Incomplete expression: ~s~%" narrow-string)
-                      (format *trace-output* "~&;; ~d of ~d characters read.~%" count length)
                       (finish-output *trace-output*)
                       (error "End of expression reached early.  Check your expression.  Parentheses **must** be balanced."))))))))
 
@@ -967,17 +982,15 @@ This `bash` access empowers you to perform a wide array of system-level operatio
             (let ((file* (handle-tilde file)))
               (handler-case
                   (progn
-                    (format *trace-output* "~&Writing file: ~a~%" file*)
-                    (finish-output *trace-output*)
                     (ensure-directories-exist file*)
                     (format *trace-output* "~&Directories exist: ~a~%" file*)
                     (finish-output *trace-output*)
                     (backup-file file*)
-                    (with-open-file (stream file* :direction :output :if-does-not-exist :create :if-exists :supersede :element-type 'character)
-                      (dolist (line (coerce lines 'list))
-                        (write-line line stream)
-                        (terpri stream))
-                      (terpri stream)))
+                    (format *trace-output* "~&Writing ~d lines to file: ~a~%" (length lines) file*)
+                    (finish-output *trace-output*)
+                    (with-open-file (stream file* :direction :output :if-does-not-exist :create :if-exists :supersede :element-type 'character :external-format :utf-8)
+                      (dolist (line (coerce lines 'list) (finish-output stream))
+                        (write-line line stream))))
                 (error (e)
                   (format *trace-output* "~&Error writing file ~a: ~a~%" file* e)))))))
 
