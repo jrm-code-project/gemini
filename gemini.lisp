@@ -340,7 +340,7 @@
                       (retry (+ temp 0.25)))
                     (error "Failed to compress context even at max temperature."))
                 (let* ((candidates (get-candidates summary-results))
-                       (first-candidate (when (and candidates (> (length (coerce candidates 'list)) 0)) (elt (coerce candidates 'list) 0)))
+                       (first-candidate (when (and candidates (consp (coerce candidates 'list)) (car (coerce candidates 'list)))))
                        (compressed-content (when first-candidate (get-content first-candidate))))
                   (if compressed-content
                       (progn

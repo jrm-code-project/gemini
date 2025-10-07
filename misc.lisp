@@ -399,14 +399,13 @@ Does not add values to ALISTS."
                 (reverse (pathname-directory path))))))))
 
 (defun next-suffix (suffix)
-  "Given a suffix like '~' or '~1', returns the next suffix in sequence.
-   For example, '~' becomes '~1', '~1' becomes '~2', and so on."
+  "Given a suffix like '~' or '~1~', returns the next suffix in sequence.
+   For example, '~' becomes '~1~', '~1~' becomes '~2~', and so on."
   (if (string= suffix "~")
-      "~1"
-      (let* ((number-part (subseq suffix 1))
-             (number (parse-integer number-part :junk-allowed t)))
+      "~1~"
+      (let ((number (parse-integer (subseq suffix 1) :junk-allowed t)))
         (if number
-            (format nil "~~~a" (1+ number))
+            (format nil "~~~a~~" (1+ number))
             (error "Invalid suffix format: ~s" suffix)))))
 
 (defun backup-pathname (pathname &optional (suffix "~"))
