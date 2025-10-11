@@ -502,25 +502,28 @@
                                           #'extend-conversation-with-first-candidate)
   "The default output processor for the Gemini API.")
 
+(defun new-context (&key (conversation-id (get-universal-time)) (topic *conversation-topic*))
+  (list (content :parts (list (part (format nil "**The following is conversation #~d.**" conversation-id))
+                              (part (format nil "**The topic of conversation is ~a.**" topic)))
+                 :role "model")))
+
 (defun current-context ()
   (if (null *context*)
-      (list (content :parts (list (part (format nil "**The following is conversation #~d.**" (get-universal-time)))
-                                  (part (format nil "**The topic of conversation is ~a.**" *conversation-topic*)))
-                     :role "model"))
+      (new-context)
       *context*))
 
 (defun current-topic ()
   (let* ((context (or *context* *prior-context*))
          (first-message (car (last context)))
          (parts (and first-message (get-parts first-message)))
-         (last-part (and parts (car (last (coerce parts 'list))))))
+         (last-part (and parts (cadr (coerce parts 'list)))))
     (and last-part (get-text last-part))))
 
 (defun (setf current-topic) (new-topic)
   (let* ((context (or *context* *prior-context*))
          (first-message (car (last context)))
          (parts (and first-message (get-parts first-message)))
-         (last-part (and parts (car (last (coerce parts 'list))))))
+         (last-part (and parts (cadr (coerce parts 'list)))))
     (when last-part
       (setf (get-text last-part)
             (format nil "**The topic of conversation is ~a.**" new-topic)))))
