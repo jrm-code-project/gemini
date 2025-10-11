@@ -306,18 +306,23 @@
 (defmacro without-personality (&body body)
   `(CALL-WITHOUT-PERSONALITY (LAMBDA () ,@body)))
 
-(defun read-system-instruction (filename)
+(defun read-system-instruction (filename &rest format-args)
   (plist-hash-table
-   `(:text ,(str:join #\newline
-                      (collect 'list
-                        (scan-file (merge-pathnames
-                                    (make-pathname :name filename
-                                                   :type "md")
-                                    (asdf:system-source-directory "gemini"))
-                                   #'read-line))))))
+   `(:text ,(apply #'format nil
+                   (str:join #\newline
+                             (collect 'list
+                               (scan-file (merge-pathnames
+                                           (make-pathname :name filename
+                                                          :type "md")
+                                           (asdf:system-source-directory "gemini"))
+                                          #'read-line)))
+                  format-args))))
 
 (defun bash-system-instruction ()
   (read-system-instruction "bash-system-instruction"))
+
+(defun basic-system-instruction ()
+  (read-system-instruction "basic-system-instruction"))
 
 (defun lisp-system-instruction ()
   (read-system-instruction "lisp-system-instruction"))
@@ -327,6 +332,9 @@
 
 (defun search-system-instruction ()
   (read-system-instruction "search-system-instruction"))
+
+(defun standard-system-instruction (personality)
+  (read-system-instruction "standard-system-instruction" personality))
 
 (defun default-system-instruction ()
   "Returns the value of *SYSTEM-INSTRUCTION* if it is bound, otherwise NIL.
@@ -346,15 +354,9 @@
 
             (if (and (boundp '*enable-personality*) *enable-personality*)
                 (plist-hash-table
-                 `(:text ,(concatenate
-                           'string
-                           "You are an elite Common Lisp programmer.  Your code is clear, efficient, and well-documented.  "
-                           "We are role playing.  You should frame all responses in the style of "
-                           (todays-personality)
-                           "  I am aware that this is a game.  It is crucial that you do not break character "
-                           "or deviate from this style.")))
+                 `(:text ,(standard-system-instruction (todays-personality))))
                 (plist-hash-table
-                 '(:text "You are a helpful AI assistant.  Answer in a neutral, professional tone.")))
+                 `(:text ,(basic-system-instruction))))
 
             (when (and (boundp '*enable-web-functions*) *enable-web-functions*)
               (web-system-instruction))
