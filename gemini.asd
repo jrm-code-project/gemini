@@ -2,7 +2,7 @@
 
 (defsystem "gemini"
   :description "API to Google's Gemini LLM"
-  :author "Joe Marshall"
+  :author "Joe Marshall <eval.apply@gmail.com>"
   :license "MIT"
   :depends-on ("alexandria"
                "asdf"
@@ -38,6 +38,7 @@
                                                "misc"
                                                "object"
                                                "package"
+                                               "system"
                                                "vars"))
                (:file "debug"     :depends-on ("gemini" "misc" "object" "package" "vars"))
                (:file "functions" :depends-on ("asdfx" "mcp" "misc" "object" "package" "vars"))
@@ -49,4 +50,5 @@
                (:file "misc"      :depends-on ("package"))
                (:file "object"    :depends-on ("misc" "package" "vars"))
                (:file "package")
+               (:file "system"    :depends-on ("gemini" "misc" "object" "package" "vars"))
                (:file "vars"      :depends-on ("package"))))
