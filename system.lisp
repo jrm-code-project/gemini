@@ -53,12 +53,14 @@ You will create a directory structure and set of files according to the template
   :author \"Your Name <you@example.com>\"
   :license \"Specify license here\"
   :depends-on (\"alexandria\"
+               \"asdf\"
                \"fold\"
                \"function\"
                \"named-let\"
                \"promise\"
                \"series\"
-               \"str\")
+               \"str\"
+               \"uiop\")
   :components ((:module \"src\"
                 :components
                 ((:file \"data\"     :depends-on (\"macros\" \"package\"))
