@@ -368,6 +368,11 @@ Does not add values to ALISTS."
         (read-sequence bytes stream)
         bytes))))
 
+(defun write-file-bytes (pathname bytes)
+  (with-open-file (stream pathname :direction :output :element-type '(unsigned-byte 8) :if-does-not-exist :create :if-exists :supersede)
+    (write-sequence bytes stream)
+    (finish-output stream)))
+
 (defun ensure-directory-pathname (pathname)
   "Ensures that the given PATHNAME ends with a directory separator.
    If PATHNAME is a string, it converts it to a pathname first."
@@ -465,6 +470,16 @@ Does not add values to ALISTS."
   (handler-case
       (let ((bytes (read-file-bytes path)))
         (and bytes (cl-base64:usb8-array-to-base64-string bytes)))
+    (file-error (e)
+      (format *error-output* "Error reading file ~a: ~a~%" path e)
+      nil)
+    (error (e)
+      (format *error-output* "Error encoding file ~a: ~a~%" path e)
+      nil)))
+
+(defun blob->file (path bytes)
+  (handler-case
+      (write-file-bytes path (cl-base64:base64-string-to-usb8-array bytes))
     (file-error (e)
       (format *error-output* "Error reading file ~a: ~a~%" path e)
       nil)

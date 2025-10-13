@@ -207,8 +207,20 @@
    Returns a list of processed arguments."
   (mappend (lambda (arg) (default-process-arg arg schema)) (hash-table-alist args)))
 
+(defparameter *function-call-aliases*
+  '(("sequential_thinking" . "sequentialthinking"))
+  "A list of (ALIAS . FUNCTION-NAME) pairs for function call name normalization.")
+
+(defun resolve-function-call-alias (name)
+  "Resolves a function call name to its canonical name using *function-call-aliases*."
+  (or (cdr (assoc name *function-call-aliases* :test #'equal))
+      name))
+
+(defparameter *trace-function-calls* t
+  "If true, function calls will be traced to *trace-output*.")
+
 (defun default-process-function-call (function-call-part)
-  (let* ((name (get-name function-call-part))
+  (let* ((name (resolve-function-call-alias (get-name function-call-part)))
          (args (get-args function-call-part))
          (functions (standard-functions-and-handlers))
          (entry (assoc name functions :key #'get-name :test #'equal))
@@ -218,9 +230,9 @@
                         (car entry)))))
          (handler (and entry (cdr entry)))
          (arglist (default-process-args args schema)))
-    ;; (format *trace-output* "~&;; Processing function call: ~s~%" (dehashify function-call-part))
-    ;; (format *trace-output* "~&;; Invoking function: ~a(~{~a~^, ~})~%" name arglist)
-    ;; (force-output *trace-output*)
+    (when *trace-function-calls*
+      (format *trace-output* "~&;; Invoking function: ~a(~{~s~^, ~})~%" name arglist)
+      (force-output *trace-output*))
     (let ((response
             (object :function-response
                      (object 
@@ -263,8 +275,9 @@
                                              (object :error (format nil "~a" e)
                                                      :standard-output output-string
                                                      :error-output error-string))))))))))
-      ;; (format *trace-output* "~&;; Function call response: ~s~%" (dehashify response))
-      ;; (force-output *trace-output*)
+      (when *trace-function-calls*
+        (format *trace-output* "~&;; Function call response: ~s~%" (dehashify response))
+        (force-output *trace-output*))
       response)))
 
 (defvar *accumulated-prompt-tokens* 0

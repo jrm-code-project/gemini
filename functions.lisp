@@ -192,6 +192,7 @@ This `bash` access empowers you to perform a wide array of system-level operatio
                 (let* ((narrow-string (str:trim string))
                        (length (length narrow-string))
                        (*read-eval* nil))
+                  (declare (ignore length))
                   (let ((form (read-full-forms narrow-string)))
                     (if (null form)
                         jsonx:+json-false+
@@ -266,6 +267,7 @@ This `bash` access empowers you to perform a wide array of system-level operatio
           (lambda (&key string)
             (let* ((narrow-string (str:trim string))
                    (length (length narrow-string)))
+              (declare (ignore length))
               (if (or (eq *enable-eval* :yolo)
                       (yes-or-no-p "May I evaluate ~a?" narrow-string))
                   (let ((form (read-full-forms narrow-string)))
@@ -579,6 +581,7 @@ This `bash` access empowers you to perform a wide array of system-level operatio
           (lambda (&key expression)
             (let* ((narrow-string (str:trim expression))
                    (length (length narrow-string)))
+              (declare (ignore length))
               (let ((form (read-full-forms narrow-string)))
                 (if form
                     (let ((expanded (multiple-value-list (macroexpand form))))
@@ -606,6 +609,7 @@ This `bash` access empowers you to perform a wide array of system-level operatio
           (lambda (&key expression)
             (let* ((narrow-string (str:trim expression))
                    (length (length narrow-string)))
+              (declare (ignore length))
               (let ((form (read-full-forms narrow-string)))
                 (if form
                     (let ((expanded (multiple-value-list (macroexpand-1 form))))
@@ -741,13 +745,35 @@ This `bash` access empowers you to perform a wide array of system-level operatio
        (when *enable-file-system*
          (cons
           (function-declaration
-           :name "readFileLines"
-           :description "Returns the lines of a file as a vector of strings.  This is the preferred way to read the contents of a file."
+           :name "readFileBlob"
+           :description "Returns the contents of a file as a blob.  This is the preferred way to read a binary file."
            :behavior :blocking
            :parameters (schema :type :object
                                :properties (object :pathname
                                                    (schema :type :string
-                                                           :description "The pathname of the file to read."))
+                                                           :description "The pathname of the binray file to read.")
+                                                   :mime-type
+                                                   (schema :type :string
+                                                           :description "The MIME type of the file.  Defaults to 'application/octet-stream'."))
+                               :required (vector :pathname))
+           :response (schema :type :object))
+          (lambda (&key pathname (mime-type "application/octet-stream"))
+            (format *trace-output* "~&Reading binary file: ~a~%" (handle-tilde pathname))
+            (finish-output *trace-output*)
+            (object
+             :data (file->blob (handle-tilde pathname))
+             :mime-type mime-type))))
+
+       (when *enable-file-system*
+         (cons
+          (function-declaration
+           :name "readFileLines"
+           :description "Returns the lines of a file as a vector of strings.  This is the preferred way to read the contents of a text file."
+           :behavior :blocking
+           :parameters (schema :type :object
+                               :properties (object :pathname
+                                                   (schema :type :string
+                                                           :description "The pathname of the text file to read."))
                                :required (vector :pathname))
            :response (schema :type :array
                              :items (schema :type :string)))
@@ -920,12 +946,64 @@ This `bash` access empowers you to perform a wide array of system-level operatio
        (when *enable-file-system*
          (cons
           (function-declaration
+           :name "temporaryDirectory"
+           :description "Returns the pathname of the temporary directory.  This is the preferred way to find the temporary directory."
+           :behavior :blocking
+           :response (schema :type :string))
+          (lambda ()
+            (namestring (uiop:temporary-directory)))))
+
+       (when *enable-file-system*
+         (cons
+          (function-declaration
+           :name "temporaryFilename"
+           :description "Returns the name of a temporary file. This is the preferred way to obtain a temporary file name."
+           :behavior :blocking
+           :parameters (schema :type :object
+                               :properties (object :type
+                                                   (schema :type :string
+                                                           :description "An optional file type for the temporary file name."))
+                               :required (vector))
+           :response (schema :type :string))
+          (lambda (&key type)
+            (namestring
+             (make-pathname
+              :name (let ((chars "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"))
+                      (coerce
+                             (loop repeat 16
+                                   collect (aref chars (random (length chars))))
+                             'string))
+              :type type)))))
+
+       (when *enable-file-system*
+         (cons
+          (function-declaration
            :name "userHomeDirectory"
            :description "Returns the user's home directory pathname.  This is the preferred way to find the user's home directory."
            :behavior :blocking
            :response (schema :type :string))
           (lambda ()
             (namestring (user-homedir-pathname)))))
+
+       (cons
+        (function-declaration
+         :name "viewImageFile"
+         :description "Opens a file in the default image viewer application."
+         :behavior :blocking
+         :parameters (schema :type :object
+                             :properties (object :pathname
+                                                 (schema :type :string
+                                                         :description "The pathname of the image to view."))
+                             :required (vector :pathname))
+         :response (schema :type :boolean
+                           :description "Returns true after launching the image viewer."))
+
+        (lambda (&key pathname)
+          (let ((windows-file-name (str:trim (uiop:run-program (list "wslpath" "-aw" (handle-tilde pathname))
+                                                               :output :string
+                                                               :ignore-error-status t))))
+            (uiop:launch-program (str:join #\Space (list "cmd.exe" "/C" "start" (format nil "\"~a\"" windows-file-name))))
+            jsonx:+json-true+)))
 
        (when (and *enable-web-search*
                   (google:google-search-engine-id)
@@ -962,6 +1040,52 @@ This `bash` access empowers you to perform a wide array of system-level operatio
                          (get-items
                           (google:web-search
                            (str:join "+" (str:split " " search-terms :omit-nulls t)))))))))
+
+       (when *enable-file-system*
+         (cons
+          (function-declaration
+           :name "windowsTemporaryDirectory"
+           :description "Returns the pathname of the windows temporary directory.  This is the preferred way to find the windows temporary directory."
+           :behavior :blocking
+           :response (schema :type :string))
+          (lambda ()
+            "/mnt/c/Windows/Temp/")))
+
+       (when *enable-file-system*
+         (cons
+          (function-declaration
+           :name "writeFileBlob"
+           :description "Write a blob to a file.  This is the preferred way to write the contents of a binary file."
+           :behavior :blocking
+           :parameters (schema :type :object
+                               :properties (object :file
+                                                   (schema :type :string
+                                                           :description "The path to the file to write.")
+                                                   :blob
+                                                   (schema :type :object
+                                                           :properties (object :data
+                                                                    (schema :type :string
+                                                                            :description "The base64-encoded data of the blob.")
+                                                                    :mime-type
+                                                                    (schema :type :string
+                                                                            :description "The MIME type of the blob."))
+                                                           :required (vector :data :mime-type)
+                                                           :description "The blob to write to the file."))
+                               :required (vector :file :blob)))
+          (lambda (&key file blob)
+            (let ((file* (handle-tilde file)))
+              (handler-case
+                  (progn
+                    (ensure-directories-exist file*)
+                    (format *trace-output* "~&Directories exist: ~a~%" file*)
+                    (finish-output *trace-output*)
+                    (backup-file file*)
+                    (format *trace-output* "~&Writing ~d to file: ~a~%" blob file*)
+                    (finish-output *trace-output*)
+                    (blob->file file* (get-data blob)))
+
+                (error (e)
+                  (format *trace-output* "~&Error writing file ~a: ~a~%" file* e)))))))
 
        (when *enable-file-system*
          (cons
