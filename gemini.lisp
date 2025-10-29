@@ -2,13 +2,24 @@
 
 (in-package "GEMINI")
 
-(defparameter +default-model+ "gemini-2.5-flash"
+(defparameter +default-model+ "models/gemini-2.5-flash"
   "The default model to use for the Gemini API.
    This can be overridden by the MODEL keyword argument in `invoke-gemini`.")
 
 (defparameter +gemini-api-base-url+
-  "https://generativelanguage.googleapis.com/v1beta/models/"
+  "https://generativelanguage.googleapis.com/v1beta/"
   "The base URL for the Gemini API endpoints.")
+
+(defun list-models (&optional page-token)
+  "Lists available models from the Gemini API."
+  (let ((response
+          (google:google-get
+           (format nil "~amodels~@[?pageToken=~a~]" +gemini-api-base-url+ page-token)
+           (google:gemini-api-key))))
+    (append (coerce (gethash :models response) 'list)
+            (let ((next-page-token (gethash :next-page-token response)))
+              (when next-page-token
+                (list-models next-page-token))))))
 
 (defun %invoke-gemini (model-id payload)
   "Invokes the Gemini API with the specified MODEL-ID and PAYLOAD.
@@ -27,7 +38,8 @@
              (setq aborted nil)))
       (let ((elapsed-time (local-time:timestamp-difference (local-time:now) start-time)))
         (format *trace-output* "~&;; Gemini API ~:[finished in~;aborted after~] ~,2f seconds.~%" aborted
-                elapsed-time)))))
+                elapsed-time)
+        (finish-output *trace-output*)))))
 
 (defun file->part (path &key (mime-type (guess-mime-type path)))
   "Reads a file from PATH, base64 encodes its content, and returns a content PART object
@@ -40,10 +52,12 @@
 (defun prepare-file-parts (files)
   "Converts a list of file specifications into a list of PART objects.
    Each element in FILES should be a path string or a list (PATH &optional MIME-TYPE)."
-  (map nil (lambda (file-spec)
-             (destructuring-bind (path &optional mime-type)
-                    (if (listp file-spec) file-spec (list file-spec))
-               (file->part path :mime-type mime-type)))
+  (map 'list (lambda (file-spec)
+               (destructuring-bind (path &optional mime-type)
+                   (if (listp file-spec) file-spec (list file-spec))
+                 (if mime-type
+                     (file->part path :mime-type mime-type)
+                     (file->part path))))
        files))
 
 (defun merge-user-prompt-and-files (prompt-contents file-parts)
@@ -486,10 +500,10 @@
 
 (defun tail-call-functions (results)
   (let ((function-calls (extract-function-calls-from-results results)))
+    (assert (or (null function-calls) (list-of-parts? function-calls)) () "Expected function-calls to be a list of parts.")
     (if function-calls
         (let ((function-results (map 'list (compose #'default-process-function-call #'get-function-call)
                                      function-calls)))
-          (assert (list-of-parts? function-calls) () "Expected function-calls to be a list of parts.")
           (assert (list-of-parts? function-results) () "Expected function-results to be a list of parts.")
           (invoke-gemini
            (list (content :parts function-results
@@ -608,3 +622,14 @@
    Returns the processed response from the API."
   (let ((*context* *prior-context*))
     (invoke-gemini content :model *prior-model*)))
+
+(defun invert-context (context)
+  "Inverts the roles in the given CONTEXT.
+   User parts become model parts and vice versa."
+  (map 'list (lambda (content)
+               (object :parts (get-parts content)
+                       :role (cond ((string= (get-role content) "user") "model")
+                                   ((string= (get-role content) "model") "user")
+                                   (t (get-role content)))))
+       context))
+

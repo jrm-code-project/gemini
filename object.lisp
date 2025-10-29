@@ -184,12 +184,13 @@
                     (if (and (eq car newcar) (eq cdr newcdr))
                         thing
                         (cons newcar newcdr)))))))
-        ((or (null thing)
-             (symbolp thing)
+        ((or (symbolp thing)
              (stringp thing)
              (numberp thing)
              (typep thing 'jsonx:json-literal))
          thing)
+        ((null thing)
+         (object))
         ((hash-table-p thing)
          (let* ((alist (hash-table-alist thing))
                 (new-alist (mapcar #'encode-schema-type

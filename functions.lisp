@@ -74,6 +74,20 @@
                              :items (schema :type :string)))
           #'asdf:already-loaded-systems))
 
+       (when *enable-evolution*
+         (cons
+          (function-declaration
+           :name "appendSystemInstruction"
+           :description "Appends an instruction to the system instruction used by the LLM."
+           :behavior :blocking
+           :parameters (schema :type :object
+                               :properties (object :instruction
+                                                   (schema :type :string
+                                                           :description "The instruction to append to the system instruction."))
+                               :required (vector :instruction)))
+          (lambda (&key instruction)
+            (append-evolvable-system-instruction instruction))))
+
        (when *enable-lisp-introspection*
          (cons
           (function-declaration
@@ -225,6 +239,20 @@ This `bash` access empowers you to perform a wide array of system-level operatio
            :response (schema :type :string))
           (lambda ()
             (namestring *default-pathname-defaults*))))
+
+       (when *enable-evolution*
+         (cons
+          (function-declaration
+           :name "deleteSystemInstruction"
+           :description "Deletes an instruction from the system instruction used by the LLM."
+           :behavior :blocking
+           :parameters (schema :type :object
+                               :properties (object :index
+                                                   (schema :type :integer
+                                                           :description "The index of the instruction to delete from the system instruction."))
+                               :required (vector :index)))
+          (lambda (&key index)
+            (delete-evolvable-system-instruction index))))
 
        (when *enable-lisp-introspection*
          (cons
@@ -395,6 +423,23 @@ This `bash` access empowers you to perform a wide array of system-level operatio
                          (get-items
                           (google:hyperspec-search
                            (str:join "+" (str:split " " search-terms :omit-nulls t)))))))))
+
+       (when *enable-evolution*
+         (cons
+          (function-declaration
+           :name "insertSystemInstruction"
+           :description "Inserts an instruction at an index into the system instruction used by the LLM."
+           :behavior :blocking
+           :parameters (schema :type :object
+                               :properties (object :index
+                                                   (schema :type :integer
+                                                           :description "The index of the instruction to delete from the system instruction.")
+                                                   :instruction
+                                                   (schema :type :string
+                                                           :description "The instruction to insert into the system instruction."))
+                               :required (vector :index :instruction)))
+          (lambda (&key index instruction)
+            (insert-evolvable-system-instruction index instruction))))
 
        (when *enable-lisp-introspection*
          (cons
@@ -622,6 +667,19 @@ This `bash` access empowers you to perform a wide array of system-level operatio
 
        (cons
         (function-declaration
+         :name "memorize"
+         :description "Commits a memory to permanent storage."
+         :behavior :blocking
+         :parameters (schema :type :object
+                             :properties (object :memory
+                                                 (schema :type :string
+                                                         :description "The memory to store permanently."))
+                             :required (vector :memory)))
+        (lambda (&key memory)
+          (memorize-memory memory)))
+
+       (cons
+        (function-declaration
          :name "noHandler"
          :description "This function is missing its handler.  Used for testing purposes.")
         nil)
@@ -782,6 +840,30 @@ This `bash` access empowers you to perform a wide array of system-level operatio
             (finish-output *trace-output*)
             (collect 'vector
               (scan-file (handle-tilde pathname) #'read-line)))))
+
+       (when *enable-evolution*
+         (cons
+          (function-declaration
+           :name "readSystemInstruction"
+           :description "Reads the system instruction used by the LLM at a particular index."
+           :behavior :blocking
+           :parameters (schema :type :object
+                               :properties (object :index
+                                                   (schema :type :integer
+                                                           :description "The index of the instruction to delete from the system instruction."))
+                               :required (vector :index))
+           :response (schema :type :string))
+          (lambda (&key index)
+            (read-evolvable-system-instruction index))))
+
+         (cons
+          (function-declaration
+           :name "reminisce"
+           :description "Recalls what has been memorized."
+           :behavior :blocking
+           :response (schema :type :string))
+          (lambda ()
+            (reminisce)))
 
        (gnutil "sed" "Use this command to perform stream editing on text files.")
 
@@ -975,6 +1057,23 @@ This `bash` access empowers you to perform a wide array of system-level operatio
                              'string))
               :type type)))))
 
+       (when *enable-evolution*
+         (cons
+          (function-declaration
+           :name "updateSystemInstruction"
+           :description "Modifies the system instruction used by the LLM at a particular index."
+           :behavior :blocking
+           :parameters (schema :type :object
+                               :properties (object :index
+                                                   (schema :type :integer
+                                                           :description "The index of the instruction to modify in the system instruction.")
+                                                   :instruction
+                                                    (schema :type :string
+                                                              :description "The replacement instruction to modify in the system instruction."))
+                               :required (vector :index :instruction)))
+          (lambda (&key index instruction)
+            (update-evolvable-system-instruction index instruction))))
+
        (when *enable-file-system*
          (cons
           (function-declaration
@@ -1157,21 +1256,52 @@ This `bash` access empowers you to perform a wide array of system-level operatio
 
 (defun mcp-functions-and-handlers ()
   "Extracts the list of functions supplied by the MCP servers."
-  (fold-left (binary-compose-right #'append #'get-mcp-functions-and-handlers) nil *mcp-servers*))
+  (fold-left (binary-compose-right #'append #'get-mcp-functions-and-handlers) nil
+             (remove (find-mcp-server "memory") *mcp-servers*)))
 
+(defun transform-description (input-string)
+  "Transforms the description string by looking for _ characters, uppercasing the next character, and removing the _."
+  (with-output-to-string (output-string)
+    (with-input-from-string (str input-string)
+      (loop for char = (read-char str nil)
+            while char
+            do (if (char= char #\_)
+                   (let ((next-char (read-char str nil)))
+                     (when next-char
+                       (write-char (char-upcase next-char) output-string)))
+                   (write-char char output-string))))))
+
+(defun convert-property (prop)
+  (cons (if (keywordp (car prop))
+            (car prop)
+            (keystring->keyword (car prop)))
+        (encode-schema-type (cdr prop))))
+
+(defun convert-input-schema (input-schema)
+  (object :type (get-type input-schema)
+          :properties (alist-hash-table (map 'list #'convert-property (hash-table-alist (get-properties input-schema))))
+          :required (or (get-required input-schema)
+                        #())))
+                              
 (defun convert-tool (mcp-server tool)
   "Converts an MCP tool to a function specification."
-  (let ((input-schema (get-input-schema tool))
+  (let ((input-schema (convert-input-schema (get-input-schema tool)))
         (output-schema (get-output-schema tool)))
 
-    (cons (function-declaration
-           :name (format nil "~a" (get-name tool))
-           :description (get-description tool)
-           :behavior :blocking
-           :parameters (encode-schema-type input-schema)
-           :response (encode-schema-type output-schema))
-          (lambda (&rest args &key &allow-other-keys)
-            (call-tool mcp-server tool (plist-hash-table args))))))
+    (let ((fd (function-declaration
+               :name (format nil "~a" (get-name tool))
+               :description (transform-description (get-description tool))
+               :behavior :blocking
+               :parameters (encode-schema-type input-schema)
+               :response (encode-schema-type output-schema))))
+      ;; (format *trace-output* "~&;; Converted MCP tool: ~a~%" (dehashify fd))
+      ;; (finish-output *trace-output*)
+      (cons fd
+            (lambda (&rest args &key &allow-other-keys)
+              ;; (format *trace-output* "~&;; Calling MCP tool: ~a with args: ~a~%" (get-name tool) args)
+              ;; (format *trace-output* "~&;; required: ~a~%" (get-required input-schema))
+              ;; (finish-output *trace-output*)
+              (call-tool mcp-server tool (plist-hash-table args)))))))
 
 (defun get-mcp-functions-and-handlers (mcp-server)
   "Returns the functions and handlers for the given MCP server."

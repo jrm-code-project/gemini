@@ -233,6 +233,9 @@
 (defparameter *enable-eval* t
   "If true, enables the Gemini model to evaluate Lisp expressions.  This is a powerful feature that should be used with caution.  Set to t to ask before evaluation, to :yolo to allow the model to evaluate any expression.  If nil, evaluation is disabled.")
 
+(defparameter *enable-evolution* nil
+  "If true, enables the Gemini model to evolve its own code and behavior over time.")
+
 (defparameter *enable-file-system* t
   "If true, enables the Gemini model to read and write files on the local filesystem.")
 
@@ -353,8 +356,7 @@
               (lisp-system-instruction))
 
             (if (and (boundp '*enable-personality*) *enable-personality*)
-                (plist-hash-table
-                 `(:text ,(standard-system-instruction (todays-personality))))
+                (standard-system-instruction (todays-personality))
                 (plist-hash-table
                  `(:text ,(basic-system-instruction))))
 

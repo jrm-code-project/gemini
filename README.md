@@ -124,9 +124,54 @@ You can configure the API key and default model using environment variables or f
 - For network errors, verify your internet connection and proxy settings.
 - For authentication errors, confirm the API key location and permissions.
 
+### Dynamic Personalities
+
+A unique feature of this library is its dynamic personality system, designed to make interactions more engaging and varied.
+
+By default (`*enable-personality*` is `t`), the system will automatically select a new, random personality each day from a predefined list. All responses from the LLM, including code explanations and conversational filler, will be delivered in the voice of that character. Today you might be talking to a pirate; tomorrow, a film noir detective.
+
+#### Controlling the Personality
+
+While this feature is intended to be fun, you may find yourself needing to change or disable the current personality. This can be controlled via the following functions:
+
+*   **Change the Daily Personality:** If you are not enjoying the day's randomly selected persona, you can force a new one to be chosen:
+    ```common-lisp
+    (gemini:new-personality)
+    ```
+    This will randomly select a new personality from the list that will remain active for the rest of the day (or until `new-personality` is called again).
+
+*   **Temporarily Disable Personality:** For a more straightforward, professional interaction, you can temporarily disable the personality system within a specific block of code using the `without-personality` macro:
+    ```common-lisp
+    (gemini:without-personality
+      (gemini:invoke-gemini "Please explain this concept plainly."))
+    ```
+    Inside this block, the LLM will respond in a neutral, helpful-assistant tone.
+
+*   **Globally Disable Personality:** To turn the feature off entirely for your session, you can set the special variable `*enable-personality*` to `nil`:
+    ```common-lisp
+    (setq gemini:*enable-personality* nil)
+    ```
+
 ## License
 
 See `LICENSE` for details. This project is licensed under the MIT License.
+
+### Known Limitations & Future Roadmap
+
+This library was initially developed as a personal tool and, as such, contains certain architectural decisions that reflect its original scope. Users and potential contributors should be aware of the following limitations, which are the primary targets for future refactoring and development:
+
+1.  **Tight Coupling to Google Gemini API:**
+    The current implementation is hardwired directly to the Google Gemini API. All HTTP requests, authentication methods, and payload structures in `gemini.lisp` are specific to Google's backend. This makes the system inflexible and not easily adaptable to other LLM providers (e.g., Anthropic, OpenAI, Together.ai, or local models).
+    *   **Roadmap:** A major future goal is to introduce a generic backend abstraction layer. This will involve defining a common "LLM client" interface and refactoring the core logic to operate against that interface. Specific API providers, including the existing Gemini implementation, will then be moved into their own backend modules that adhere to this new standard.
+
+2.  **Global, Single-Threaded Conversation Context:**
+    The conversational state is managed via a global special variable (`*context*`). This model is simple and effective for linear, single-user, single-model conversations. However, it becomes unwieldy for more complex scenarios, such as:
+    *   Recursive calls to the LLM for sub-problems within a larger conversation.
+    *   Orchestrating conversations between multiple models.
+    *   Handling multi-user or multi-threaded interactions.
+    *   **Roadmap:** The plan is to refactor the context management system away from a global state. This will likely involve introducing "conversation" objects that encapsulate their own history and state. Core functions like `invoke-gemini` would be modified to operate on a specific conversation object, allowing for a multitude of parallel, independent, and nested conversations.
+
+Contributions and ideas for tackling these architectural improvements are highly encouraged.
 
 ## Contributing
 

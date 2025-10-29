@@ -69,7 +69,13 @@
   "Converts a camelCase string to a Lisp keyword.
    If the string is not a valid camelCase string, it signals an error."
   (check-type keystring string)
-  (intern (cl-json:simplified-camel-case-to-lisp keystring) (find-package "KEYWORD")))
+  (intern (cl-json:simplified-camel-case-to-lisp
+           (if (position #\_ keystring)
+               (let ((terms (str:split #\_ keystring :omit-nulls t)))
+                 (str:join "" (cons (string-downcase (car terms))
+                                    (mapcar #'string-capitalize (cdr terms)))))
+               keystring))
+          (find-package "KEYWORD")))
 
 (defun ->keyword (thing)
   (etypecase thing
@@ -486,3 +492,49 @@ Does not add values to ALISTS."
     (error (e)
       (format *error-output* "Error encoding file ~a: ~a~%" path e)
       nil)))
+
+(defun text-stream->paragraphs (stream)
+  (let iter ((line (read-line stream nil :eof))
+             (current-paragraph '())
+             (paragraphs '()))
+    (cond ((eq line :eof)
+           (reverse (cons (str:join #\newline (reverse current-paragraph)) paragraphs)))
+          ((string= (str:trim line) "")
+           (if current-paragraph
+               (iter (read-line stream nil :eof)
+                     '()
+                     (cons (str:join #\newline (reverse current-paragraph)) paragraphs))
+               (iter (read-line stream nil :eof)
+                     '()
+                     paragraphs)))
+          (t (iter (read-line stream nil :eof)
+                   (if (str:starts-with? "<!--" line)
+                       current-paragraph
+                       (cons line current-paragraph))
+                   paragraphs)))))
+
+(defun format-paragraphs (stream paragraphs)
+  (format stream "~{~a~%~%~}" paragraphs))
+
+(defun file->paragraphs (path)
+  (with-open-file (stream path :direction :input)
+    (text-stream->paragraphs stream)))
+
+(defun paragraphs->file (path format-preamble paragraphs)
+  (with-open-file (stream path :direction :output :if-does-not-exist :create :if-exists :supersede)
+    (funcall format-preamble stream)
+    (terpri stream)
+    (format-paragraphs stream paragraphs)
+    (finish-output stream)))
+
+(defun strip-fence (string)
+  (let* ((lines (str:split #\newline string :omit-nulls t))
+         (first-line (first lines))
+         (last-line (car (last lines))))
+    (if (and (or (str:starts-with? "```" first-line)
+                 (str:starts-with? "~~~" first-line))
+             (or (str:starts-with? "```" last-line)
+                 (str:starts-with? "~~~" last-line)))
+        (str:join #\newline
+                  (subseq lines 1 (1- (length lines))))
+        string)))
