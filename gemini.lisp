@@ -368,10 +368,21 @@
 
 (defun %count-tokens (model-id payload)
   "Invokes the Gemini API's countTokens endpoint."
-  (google:google-post
-   (concatenate 'string +gemini-api-base-url+ model-id ":countTokens")
-   (google:gemini-api-key)
-   payload))
+  (let ((start (get-internal-real-time))
+        (aborted t))
+    (unwind-protect
+         (progn
+           (format *trace-output* "~&;; Counting tokens for model `~a`...~%" model-id)
+           (finish-output *trace-output*)
+           (prog1 (google:google-post
+                   (concatenate 'string +gemini-api-base-url+ model-id ":countTokens")
+                   (google:gemini-api-key)
+                   payload)
+             (setq aborted nil)))
+      (let ((elapsed (/ (- (get-internal-real-time) start) internal-time-units-per-second)))
+        (format *trace-output* "~&;; Token counting ~:[finished in~;aborted after~] ~,2f seconds.~%" aborted
+                elapsed)
+        (finish-output *trace-output*)))))
 
 (defun compress-context (context &optional (model *model*))
   "Compresses the context by summarizing its middle parts."
