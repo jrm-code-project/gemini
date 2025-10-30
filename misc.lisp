@@ -69,6 +69,16 @@
   "Converts a camelCase string to a Lisp keyword.
    If the string is not a valid camelCase string, it signals an error."
   (check-type keystring string)
+  (assert (not (string= keystring "")) () "Key string cannot be empty.")
+  (assert (every
+           (lambda (char)
+            (or (and (>= char #\a) (<= char #\z))
+                (and (>= char #\A) (<= char #\Z))
+                (and (>= char #\0) (<= char #\9))
+                (char= char #\_)
+                (char= char #\-)))
+          keystring)
+          () "Key string contains invalid characters.")
   (intern (cl-json:simplified-camel-case-to-lisp
            (if (position #\_ keystring)
                (let ((terms (str:split #\_ keystring :omit-nulls t)))

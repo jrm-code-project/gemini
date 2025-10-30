@@ -4,6 +4,7 @@
   :description "API to Google's Gemini LLM"
   :author "Joe Marshall <eval.apply@gmail.com>"
   :license "MIT"
+  :defsystem-depends-on ("fiveam")
   :depends-on ("alexandria"
                "asdf"
                "chanl"

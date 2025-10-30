@@ -316,11 +316,47 @@
           *accumulated-prompt-tokens*
           *accumulated-response-tokens*))
 
+(defparameter *include-timestamp* nil 
+  "If true, includes a timestamp part in the prompt content.")
+
+(defun prompt-timestamp ()
+  (multiple-value-bind (sec min hour day month year) (decode-universal-time (get-universal-time))
+    (declare (ignore sec year))
+    (format nil "[~[~;Jan~;Feb~;Mar~;Apr~;May~;Jun~;Jul~;Aug~;Sep~;Oct~;Nov~;Dec~] ~d, ~d:~2,'0d]" month day hour min)))
+
+(defparameter *include-shell-log* nil
+  "If true, includes the shell log part in the prompt content.")
+
+(defun prompt-shell-log ()
+  (let ((v-shell-log (merge-pathnames
+                      (make-pathname :name ".v_aware_shell_log" :type :unspecific)
+                      (user-homedir-pathname)))
+        (temp-log (merge-pathnames
+                   (make-pathname :name (format nil "shell_log_~d" (get-internal-real-time))
+                                  :type :unspecific)
+                   (user-homedir-pathname))))
+    (when (probe-file v-shell-log)
+      (unwind-protect
+           (progn (rename-file v-shell-log temp-log)
+                  (format nil "~&--- Shell Log Start ---~%~a~%~&--- Shell Log End ---~%" (uiop:read-file-string temp-log)))
+        (delete-file temp-log)))))
+
+(defun prompt-shell-log-part ()
+  (let ((shell-log (prompt-shell-log)))
+    (when shell-log
+      (part shell-log))))
+
 (defun ->prompt (thing)
   "Converts a thing into a list of content objects."
   (cond ((content? thing) (list thing))
-        ((part? thing) (list (content :parts (list thing) :role "user")))
-        ((stringp thing) (list (content :parts (list (part thing)) :role "user")))
+        ((part? thing) (list (content :parts (remove nil (list (when *include-timestamp* (part (prompt-timestamp)))
+                                                               (when *include-shell-log* (prompt-shell-log-part))
+                                                               thing))
+                                      :role "user")))
+        ((stringp thing) (list (content :parts (remove nil (list (when *include-timestamp* (part (prompt-timestamp)))
+                                                                 (when *include-shell-log* (prompt-shell-log-part))
+                                                                 (part thing)))
+                                        :role "user")))
         ((list-of-content? thing) thing)
         ((list-of-parts? thing) (list (content :parts thing :role "user")))
         ((list-of-strings? thing)
@@ -337,11 +373,11 @@
    (google:gemini-api-key)
    payload))
 
-(defun compress-context (&optional (model *model*))
-  "Compresses the global *context* variable by summarizing its middle parts."
-  (let* ((prompt (car *context*))
-         (header (car (last *context*)))
-         (history-to-summarize (butlast (cdr *context*))))
+(defun compress-context (context &optional (model *model*))
+  "Compresses the context by summarizing its middle parts."
+  (let* ((prompt (car context))
+         (header (car (last context)))
+         (history-to-summarize (butlast (cdr context))))
 
     (when history-to-summarize
       (assert (string= (get-role prompt) "user"))
@@ -373,7 +409,7 @@
                       (progn
                         (format *trace-output* "~&;; Context successfully compressed.~%")
                         (setf (get-role compressed-content) "model")
-                        (setq *context* (list prompt compressed-content header)))
+                        (list prompt compressed-content header))
                       (error "Summarization produced no content."))))))))))
 
 (defun extend-conversation (new-content)
@@ -575,9 +611,6 @@
     (let* ((*context* (revappend prompt-contents (current-context)))
            (payload (object :contents (reverse *context*))))
       ;; Add other payload parts before counting tokens
-      (when cached-content (setf (get-cached-content payload) cached-content))
-      (when generation-config (setf (get-generation-config payload) generation-config))
-      (when safety-settings (setf (get-safety-settings payload) safety-settings))
       ;; (when system-instruction (setf (get-system-instruction payload) system-instruction))
       ;; (when tools (setf (get-tools payload) tools))
       ;; (when (and tools tool-config) (setf (get-tool-config payload) tool-config))
@@ -588,7 +621,7 @@
         (when (> total-tokens +max-prompt-tokens+)
           (format *trace-output* "~&;; Prompt token count (~d) exceeds ~d tokens, compressing context.~%" total-tokens +max-prompt-tokens+)
           (finish-output *trace-output*)
-          (compress-context *model*)
+          (setq *context* (compress-context *context* *model*))
           ;; Rebuild payload with compressed context
           (setq payload (object :contents (reverse *context*)))
           ;; Re-add other payload parts
@@ -598,6 +631,9 @@
       (when system-instruction (setf (get-system-instruction payload) system-instruction))
       (when tools (setf (get-tools payload) tools))
       (when (and tools tool-config) (setf (get-tool-config payload) tool-config))
+      (when cached-content (setf (get-cached-content payload) cached-content))
+      (when generation-config (setf (get-generation-config payload) generation-config))
+      (when safety-settings (setf (get-safety-settings payload) safety-settings))
 
       (save-transcript *context*)
       (setq *prior-context* *context*)
