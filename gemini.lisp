@@ -21,25 +21,23 @@
               (when next-page-token
                 (list-models next-page-token))))))
 
+(defun %count-tokens (model-id payload)
+  "Invokes the Gemini API's countTokens endpoint."
+  (report-elapsed-time (format nil "Token counting for model `~a`" model-id)
+    (google:google-post
+     (concatenate 'string +gemini-api-base-url+ model-id ":countTokens")
+     (google:gemini-api-key)
+     payload)))
+
 (defun %invoke-gemini (model-id payload)
   "Invokes the Gemini API with the specified MODEL-ID and PAYLOAD.
    Returns the response from the API as a decoded JSON object.
    This is an internal helper function."
-  (let ((start-time (local-time:now))
-        (aborted t))
-    (unwind-protect
-         (progn
-           (format *trace-output* "~&;; Invoking Gemini API model `~a`...~%" model-id)
-           (finish-output *trace-output*)
-           (prog1 (google:google-post
-                   (concatenate 'string +gemini-api-base-url+ model-id ":generateContent")
-                   (google:gemini-api-key)
-                   payload)
-             (setq aborted nil)))
-      (let ((elapsed-time (local-time:timestamp-difference (local-time:now) start-time)))
-        (format *trace-output* "~&;; Gemini API ~:[finished in~;aborted after~] ~,2f seconds.~%" aborted
-                elapsed-time)
-        (finish-output *trace-output*)))))
+  (report-elapsed-time (format nil "Gemini API model `~a`" model-id)
+    (google:google-post
+     (concatenate 'string +gemini-api-base-url+ model-id ":generateContent")
+     (google:gemini-api-key)
+     payload)))
 
 (defun file->part (path &key (mime-type (guess-mime-type path)))
   "Reads a file from PATH, base64 encodes its content, and returns a content PART object
@@ -101,73 +99,43 @@
   (if (boundp '*generation-config*)
       *generation-config*
       (let ((gen-config (object )))
-        (let ((candidate-count (default-candidate-count)))
-          (when candidate-count
-            (setf (get-candidate-count gen-config) candidate-count)))
-        (let ((enable-advanced-civic-answers (default-enable-advanced-civic-answers)))
-          (when enable-advanced-civic-answers
-            (setf (get-enable-advanced-civic-answers gen-config) enable-advanced-civic-answers)))
-        (let ((frequency-penalty (default-frequency-penalty)))
-          (when frequency-penalty
-            (setf (get-frequency-penalty gen-config) frequency-penalty)))
-        (let ((max-output-tokens (default-max-output-tokens)))
-          (when max-output-tokens
-            (setf (get-max-output-tokens gen-config) max-output-tokens)))
-        (let ((media-resolution (default-media-resolution)))
-          (when media-resolution
-            (setf (get-media-Resolution gen-config) media-resolution)))
-        (let ((presence-penalty (default-presence-penalty)))
-          (when presence-penalty
-            (setf (get-presence-penalty gen-config) presence-penalty)))
-        (let ((response-logprobs (default-response-logprobs)))
-          (when response-logprobs
-            (setf (get-response-logprobs gen-config) response-logprobs)))
-        (let ((logprobs (default-logprobs)))
-          (when logprobs
-            (assert (get-response-logprobs gen-config)
-                    () "Response logprobs must be set when logprobs is set.")
-            (setf (get-logprobs gen-config) logprobs)))
-        (let ((response-mime-type (default-response-mime-type)))
-          (when response-mime-type
-            (setf (get-response-mime-type gen-config) response-mime-type)))
-        (let ((response-modalities (default-response-modalities)))
-          (when response-modalities
-            (setf (get-response-modalities gen-config) response-modalities)))
-        (let ((response-schema (default-response-schema)))
-          (when response-schema
-            (assert (get-response-mime-type gen-config)
-                    () "Response MIME type must be set.")
-            (setf (get-response-schema gen-config) response-schema)))
-        (let ((response-json-schema (default-response-json-schema)))
-          (when response-json-schema
-            (assert (get-response-mime-type gen-config)
-                    () "Response MIME type must be set.")
-            (assert (not (get-response-schema gen-config))
-                    () "Response schema must not be set when response JSON schema is set.")
-            (setf (get-response-json-schema gen-config) response-json-schema)))
-        (let ((seed (default-seed)))
-          (when seed
-            (setf (get-seed gen-config) seed)))
-        (let ((speech-config (default-speech-config)))
-          (when speech-config
-            (setf (get-speech-config gen-config) speech-config)))
-        (let ((stop-sequences (default-stop-sequences)))
-          (when stop-sequences
-            (setf (get-stop-Sequences gen-config) stop-sequences)))
-        (let ((temperature (default-temperature)))
-          (when temperature
-            (setf (get-temperature gen-config) temperature)))
-        (let ((thinking-config (default-thinking-config)))
-          (when thinking-config
-            (setf (get-thinking-config gen-config) thinking-config)))
-        (let ((top-k (default-top-k)))
-          (when top-k
-            (setf (get-top-k gen-config) top-k)))
-        (let ((top-p (default-top-p)))
-          (when top-p
-            (setf (get-top-p gen-config) top-p)))
-        (unless (zerop (hash-table-count gen-config))
-          gen-config))))
+        (macrolet ((set-default (field &optional assertions)
+                     (let ((value-var (gensym))
+                           (getter (intern (format nil "~:@(get-~a~)" (symbol-name field)) (find-package "GEMINI")))
+                           (default (intern (format nil "~:@(default-~a~)" (symbol-name field)) (find-package "GEMINI"))))
+                       `(LET ((,value-var (,default)))
+                          (WHEN ,value-var
+                            ,@assertions 
+                            (SETF (,getter GEN-CONFIG) ,value-var))))))
+          (set-default :candidate-count)
+          (set-default :enable-advanced-civic-answers)
+          (set-default :frequency-penalty)
+          (set-default :max-output-tokens)
+          (set-default :media-resolution)
+          (set-default :presence-penalty)
+          (set-default :response-logprobs)
+          (set-default :logprobs
+                       ((assert (get-response-logprobs gen-config)
+                                () "Response logprobs must be set when logprobs is set.")))
+          (set-default :response-mime-type)
+          (set-default :response-modalities)
+          (set-default :response-schema
+                          ((assert (get-response-mime-type gen-config)
+                                  () "Response MIME type must be set when response schema is set.")))
+          (set-default :response-json-schema
+                          ((assert (get-response-mime-type gen-config)
+                                   () "Response MIME type must be set.")
+                           (assert (not (get-response-schema gen-config))
+                                   () "Response schema must not be set when response JSON schema is set.")))
+          (set-default :seed)
+          (set-default :speech-config)
+          (set-default :stop-sequences)
+          (set-default :temperature)
+          (set-default :thinking-config)
+          (set-default :top-k)
+          (set-default :top-p)
+          (unless (zerop (hash-table-count gen-config))
+            gen-config)))))
 
 (defun default-process-part (part)
   "Processes a single part object. If it's a text object, it extracts
@@ -320,41 +288,42 @@
   "If true, includes a timestamp part in the prompt content.")
 
 (defun prompt-timestamp ()
-  (multiple-value-bind (sec min hour day month year) (decode-universal-time (get-universal-time))
+  (multiple-value-bind (sec min hour day month year day-of-week) (decode-universal-time (get-universal-time))
     (declare (ignore sec year))
-    (format nil "[~[~;Jan~;Feb~;Mar~;Apr~;May~;Jun~;Jul~;Aug~;Sep~;Oct~;Nov~;Dec~] ~d, ~d:~2,'0d]" month day hour min)))
+    (format nil "[~[Mon~;Tue~;Wed~;Thu~;Fri~;Sat~;Sun~], ~[~;Jan~;Feb~;Mar~;Apr~;May~;Jun~;Jul~;Aug~;Sep~;Oct~;Nov~;Dec~] ~d, ~d:~2,'0d]" 
+            day-of-week month day hour min)))
 
-(defparameter *include-shell-log* nil
+(defparameter *include-bash-history* nil
   "If true, includes the shell log part in the prompt content.")
 
-(defun prompt-shell-log ()
-  (let ((v-shell-log (merge-pathnames
-                      (make-pathname :name ".v_aware_shell_log" :type :unspecific)
+(defun prompt-bash-history ()
+  (let ((v-bash-history (merge-pathnames
+                      (make-pathname :name ".v_aware_bash_history" :type :unspecific)
                       (user-homedir-pathname)))
         (temp-log (merge-pathnames
-                   (make-pathname :name (format nil "shell_log_~d" (get-internal-real-time))
+                   (make-pathname :name (format nil ".bash_history_~d" (get-internal-real-time))
                                   :type :unspecific)
                    (user-homedir-pathname))))
-    (when (probe-file v-shell-log)
+    (when (probe-file v-bash-history)
       (unwind-protect
-           (progn (rename-file v-shell-log temp-log)
-                  (format nil "~&--- Shell Log Start ---~%~a~%~&--- Shell Log End ---~%" (uiop:read-file-string temp-log)))
+           (progn (rename-file v-bash-history temp-log)
+                  (format nil "~&--- Bash History Start ---~%~a~%~&--- Bash History End ---~%" (uiop:read-file-string temp-log)))
         (delete-file temp-log)))))
 
-(defun prompt-shell-log-part ()
-  (let ((shell-log (prompt-shell-log)))
-    (when shell-log
-      (part shell-log))))
+(defun prompt-bash-history-part ()
+  (let ((bash-history (prompt-bash-history)))
+    (when bash-history
+      (part bash-history))))
 
 (defun ->prompt (thing)
   "Converts a thing into a list of content objects."
   (cond ((content? thing) (list thing))
         ((part? thing) (list (content :parts (remove nil (list (when *include-timestamp* (part (prompt-timestamp)))
-                                                               (when *include-shell-log* (prompt-shell-log-part))
+                                                               (when *include-bash-history* (prompt-bash-history-part))
                                                                thing))
                                       :role "user")))
         ((stringp thing) (list (content :parts (remove nil (list (when *include-timestamp* (part (prompt-timestamp)))
-                                                                 (when *include-shell-log* (prompt-shell-log-part))
+                                                                 (when *include-bash-history* (prompt-bash-history-part))
                                                                  (part thing)))
                                         :role "user")))
         ((list-of-content? thing) thing)
@@ -365,24 +334,6 @@
   
 (defparameter +max-prompt-tokens+ (expt 2 18)
   "The maximum number of tokens allowed in the prompt context before compression is needed.")
-
-(defun %count-tokens (model-id payload)
-  "Invokes the Gemini API's countTokens endpoint."
-  (let ((start (get-internal-real-time))
-        (aborted t))
-    (unwind-protect
-         (progn
-           (format *trace-output* "~&;; Counting tokens for model `~a`...~%" model-id)
-           (finish-output *trace-output*)
-           (prog1 (google:google-post
-                   (concatenate 'string +gemini-api-base-url+ model-id ":countTokens")
-                   (google:gemini-api-key)
-                   payload)
-             (setq aborted nil)))
-      (let ((elapsed (/ (- (get-internal-real-time) start) internal-time-units-per-second)))
-        (format *trace-output* "~&;; Token counting ~:[finished in~;aborted after~] ~,2f seconds.~%" aborted
-                elapsed)
-        (finish-output *trace-output*)))))
 
 (defun compress-context (context &optional (model *model*))
   "Compresses the context by summarizing its middle parts."
@@ -421,7 +372,8 @@
                         (format *trace-output* "~&;; Context successfully compressed.~%")
                         (setf (get-role compressed-content) "model")
                         (list prompt compressed-content header))
-                      (error "Summarization produced no content."))))))))))
+                      (progn (warn "Summarization produced no content.")
+                             (retry (+ temp 0.25))))))))))))
 
 (defun extend-conversation (new-content)
   (push new-content *context*)
@@ -602,6 +554,15 @@
       (setf (get-text last-part)
             (format nil "**The topic of conversation is ~a.**" new-topic)))))
 
+(defparameter +count-tokens-timeout+ 60
+  "The timeout in seconds for counting tokens in the prompt.")
+
+(eval-when (:load-toplevel :execute)
+  (setq dexador.connection-cache:*use-connection-pool* nil))
+
+(defparameter +max-prompt-tokens-padding+ 8192
+  "Number of excess tokens that might be taken up that we cannot count.")
+
 (defun invoke-gemini (prompt &key
                                ((:model *model*) +default-model+)
                                (files nil)
@@ -622,29 +583,42 @@
     (let* ((*context* (revappend prompt-contents (current-context)))
            (payload (object :contents (reverse *context*))))
       ;; Add other payload parts before counting tokens
+      ;; Note:  Nominally, we'd want to do this, but the countTokens API rejects the payload if we do!
+      
+      ;; (when cached-content (setf (get-cached-content payload) cached-content))
+      ;; (when generation-config (setf (get-generation-config payload) generation-config))
+      ;; (when safety-settings (setf (get-safety-settings payload) safety-settings))
       ;; (when system-instruction (setf (get-system-instruction payload) system-instruction))
       ;; (when tools (setf (get-tools payload) tools))
       ;; (when (and tools tool-config) (setf (get-tool-config payload) tool-config))
 
       ;; Check token count and compress if necessary
-      (let* ((token-count-response (%count-tokens *model* payload))
-             (total-tokens (get-total-tokens token-count-response)))
-        (when (> total-tokens +max-prompt-tokens+)
-          (format *trace-output* "~&;; Prompt token count (~d) exceeds ~d tokens, compressing context.~%" total-tokens +max-prompt-tokens+)
-          (finish-output *trace-output*)
-          (setq *context* (compress-context *context* *model*))
-          ;; Rebuild payload with compressed context
-          (setq payload (object :contents (reverse *context*)))
-          ;; Re-add other payload parts
-          (when cached-content (setf (get-cached-content payload) cached-content))
-          (when generation-config (setf (get-generation-config payload) generation-config))
-          (when safety-settings (setf (get-safety-settings payload) safety-settings))))
-      (when system-instruction (setf (get-system-instruction payload) system-instruction))
-      (when tools (setf (get-tools payload) tools))
-      (when (and tools tool-config) (setf (get-tool-config payload) tool-config))
+      (handler-case
+          (let* ((token-count-response (with-timeout (+count-tokens-timeout+)
+                                         (%count-tokens *model* payload)))
+                 (total-tokens (get-total-tokens token-count-response)))
+            (when (> total-tokens (- +max-prompt-tokens+ +max-prompt-tokens-padding+))
+              (format *trace-output* "~&;; Prompt token count (~d) exceeds ~d tokens, compressing context.~%"
+                      total-tokens (- +max-prompt-tokens+ +max-prompt-tokens-padding+))
+              (finish-output *trace-output*)
+              (setq *context* (compress-context *context* *model*))
+              ;; Rebuild payload with compressed context
+              (setq payload (object :contents (reverse *context*)))
+              ;; Re-add other payload parts
+              (when cached-content (setf (get-cached-content payload) cached-content))
+              (when generation-config (setf (get-generation-config payload) generation-config))
+              (when safety-settings (setf (get-safety-settings payload) safety-settings))))
+        (timeout-error (c)
+          (declare (ignore c))
+          (warn "Token counting timed out after ~d seconds. Proceeding without compression." +count-tokens-timeout+)))
+
+      ;; See above note.
       (when cached-content (setf (get-cached-content payload) cached-content))
       (when generation-config (setf (get-generation-config payload) generation-config))
       (when safety-settings (setf (get-safety-settings payload) safety-settings))
+      (when system-instruction (setf (get-system-instruction payload) system-instruction))
+      (when tools (setf (get-tools payload) tools))
+      (when (and tools tool-config) (setf (get-tool-config payload) tool-config))
 
       (save-transcript *context*)
       (setq *prior-context* *context*)

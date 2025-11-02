@@ -21,6 +21,7 @@
                "series"
                "str"
                "trivial-backtrace"
+               "trivial-timeout"
                "uiop")
   :components ((:file "analyze"   :depends-on ("gemini" "object" "package" "vars"))
                (:file "asdfx"     :depends-on ("package"))
@@ -48,6 +49,7 @@
                (:file "improve"   :depends-on ("gemini" "misc" "object" "package" "vars"))
                (:file "jsonrpc"   :depends-on ("misc" "object" "package"))
                (:file "llm-repl"  :depends-on ("functions" "gemini" "object" "package" "vars"))
+               (:file "macros"    :depends-on ("package"))
                (:file "mcp"       :depends-on ("jsonrpc" "misc" "object" "package" "vars"))
                (:file "meta"      :depends-on ("gemini" "misc" "object" "package" "vars"))
                (:file "misc"      :depends-on ("package"))

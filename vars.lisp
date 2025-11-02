@@ -16,7 +16,7 @@
 
 (defun save-transcript (context)
   (ensure-directories-exist (transcript-directory))
-  (let* ((initial-text (get-text (car (get-parts (car (last context))))))
+  (let* ((initial-text (get-text (car (coerce (get-parts (car (coerce (last context) 'list))) 'list))))
          (sharp-pos (position #\# initial-text))
          (dot-pos (position #\. initial-text :start sharp-pos))
          (conversation-number (subseq initial-text (1+ sharp-pos) dot-pos))
@@ -47,6 +47,24 @@
         (finish-output out)))
     (when (probe-file old-pathname)
       (delete-file old-pathname))))
+
+(defun load-context (&optional conversation-number)
+  (let* ((saved-contexts (directory (merge-pathnames
+                                     (make-pathname :name :wild :type "txt")
+                                     (transcript-directory))))
+         (selected-context (if conversation-number
+                               (find-if (lambda (pathname)
+                                          (str:starts-with? (format nil "~d-" conversation-number)
+                                                            (pathname-name pathname)))
+                                        saved-contexts)
+                               (car (sort saved-contexts
+                                          (lambda (a b)
+                                            (string> (namestring a) (namestring b))))))))
+    (with-open-file (in selected-context
+                        :direction :input
+                        :if-does-not-exist :error)
+      (when in
+        (reverse (coerce (jsonx:with-decoder-jrm-semantics (cl-json:decode-json in)) 'list))))))
 
 (defvar *cached-content*)
 (eval-when (:compile-toplevel :load-toplevel :execute)
