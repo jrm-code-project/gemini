@@ -45,7 +45,9 @@
   (part
    (object
     :data (file->blob path)
-    :mime-type mime-type)))
+    :mime-type (if (string-equal "application/json" mime-type) ;; Gemini bug.
+                   "text/plain"
+                   mime-type))))
 
 (defun prepare-file-parts (files)
   "Converts a list of file specifications into a list of PART objects.
@@ -92,50 +94,70 @@
         (unless (zerop (hash-table-count tools))
           tools))))
 
+(defun generation-config (&key
+                            (candidate-count (default-candidate-count))
+                            (enable-advanced-civic-answers (default-enable-advanced-civic-answers))
+                            (frequency-penalty (default-frequency-penalty))
+                            (max-output-tokens (default-max-output-tokens))
+                            (media-resolution (default-media-resolution))
+                            (presence-penalty (default-presence-penalty))
+                            (response-logprobs (default-response-logprobs))
+                            (logprobs (default-logprobs))
+                            (response-mime-type (default-response-mime-type))
+                            (response-modalities (default-response-modalities))
+                            (response-schema (default-response-schema))
+                            (response-json-schema (default-response-json-schema))
+                            (seed (default-seed))
+                            (speech-config (default-speech-config))
+                            (stop-sequences (default-stop-sequences))
+                            (temperature (default-temperature))
+                            (thinking-config (default-thinking-config))
+                            (top-k (default-top-k))
+                            (top-p (default-top-p)))
+  (let ((generation-config (object)))
+    (macrolet ((init (field)
+                 (let ((getter (intern (format nil "~:@(get-~a~)" (symbol-name field)) (find-package "GEMINI"))))
+                   `(WHEN ,field (SETF (,getter GENERATION-CONFIG) ,field)))))
+      (init candidate-count)
+      (init enable-advanced-civic-answers)
+      (init frequency-penalty)
+      (init max-output-tokens)
+      (init media-resolution)
+      (init presence-penalty)
+      (init response-logprobs)
+      (init logprobs)
+      (init response-mime-type)
+      (init response-modalities)
+      (init response-schema)
+      (init response-json-schema)
+      (init seed)
+      (init speech-config)
+      (init stop-sequences)
+      (init temperature)
+      (init thinking-config)
+      (init top-k)
+      (init top-p)
+      (when (get-logprobs generation-config)
+        (assert (get-response-logprobs generation-config)
+                () "Response logprobs must be set when logprobs is set."))
+      (when (get-response-schema generation-config)
+        (assert (get-response-mime-type generation-config)
+                () "Response MIME type must be set when response schema is set."))
+      (when (get-response-json-schema generation-config)
+        (assert (get-response-mime-type generation-config)
+                () "Response MIME type must be set when response JSON schema is set.")
+        (assert (not (get-response-schema generation-config))
+                () "Response schema must not be set when response JSON schema is set."))
+      (unless (zerop (hash-table-count generation-config))
+        generation-config))))
+
 (defun default-generation-config ()
   "Returns a default generation configuration object.
    It constructs a hash table by combining various default settings
    related to candidate generation, safety, and response formatting."
   (if (boundp '*generation-config*)
       *generation-config*
-      (let ((gen-config (object )))
-        (macrolet ((set-default (field &optional assertions)
-                     (let ((value-var (gensym))
-                           (getter (intern (format nil "~:@(get-~a~)" (symbol-name field)) (find-package "GEMINI")))
-                           (default (intern (format nil "~:@(default-~a~)" (symbol-name field)) (find-package "GEMINI"))))
-                       `(LET ((,value-var (,default)))
-                          (WHEN ,value-var
-                            ,@assertions 
-                            (SETF (,getter GEN-CONFIG) ,value-var))))))
-          (set-default :candidate-count)
-          (set-default :enable-advanced-civic-answers)
-          (set-default :frequency-penalty)
-          (set-default :max-output-tokens)
-          (set-default :media-resolution)
-          (set-default :presence-penalty)
-          (set-default :response-logprobs)
-          (set-default :logprobs
-                       ((assert (get-response-logprobs gen-config)
-                                () "Response logprobs must be set when logprobs is set.")))
-          (set-default :response-mime-type)
-          (set-default :response-modalities)
-          (set-default :response-schema
-                          ((assert (get-response-mime-type gen-config)
-                                  () "Response MIME type must be set when response schema is set.")))
-          (set-default :response-json-schema
-                          ((assert (get-response-mime-type gen-config)
-                                   () "Response MIME type must be set.")
-                           (assert (not (get-response-schema gen-config))
-                                   () "Response schema must not be set when response JSON schema is set.")))
-          (set-default :seed)
-          (set-default :speech-config)
-          (set-default :stop-sequences)
-          (set-default :temperature)
-          (set-default :thinking-config)
-          (set-default :top-k)
-          (set-default :top-p)
-          (unless (zerop (hash-table-count gen-config))
-            gen-config)))))
+      (generation-config)))
 
 (defun default-process-part (part)
   "Processes a single part object. If it's a text object, it extracts
@@ -497,6 +519,19 @@
                 (= (length candidates) 1))
            (candidate-as-text-string (svref candidates 0))))))
 
+(defun function-caller (prompt recur)
+  (lambda (results)
+    (let ((function-calls (extract-function-calls-from-results results)))
+      (assert (or (null function-calls) (list-of-parts? function-calls)) () "Expected function-calls to be a list of parts.")
+      (if function-calls
+          (let ((function-results (map 'list (compose #'default-process-function-call #'get-function-call)
+                                       function-calls)))
+            (assert (list-of-parts? function-results) () "Expected function-results to be a list of parts.")
+            (funcall recur (append prompt (list (content :parts function-results
+                                                         :role "function")))))
+          (or (and *return-text-string* (as-singleton-text-string results))
+              results)))))
+
 (defun tail-call-functions (results)
   (let ((function-calls (extract-function-calls-from-results results)))
     (assert (or (null function-calls) (list-of-parts? function-calls)) () "Expected function-calls to be a list of parts.")
@@ -559,6 +594,72 @@
 
 (eval-when (:load-toplevel :execute)
   (setq dexador.connection-cache:*use-connection-pool* nil))
+
+(defun content-generator (&key
+                          (cached-content (default-cached-content))
+                          (generation-config (default-generation-config))
+                          (model +default-model+)
+                          (tools (default-tools))
+                          (tool-config (default-tool-config))
+                          (safety-settings (default-safety-settings))
+                          (system-instruction (default-system-instruction)))
+  (labels ((reprompt (prompt &key files)
+             (let* ((file-parts (when files (prepare-file-parts files)))
+                    (prompt-contents-base (->prompt prompt))
+                    (prompt-contents (if file-parts
+                                         (merge-user-prompt-and-files prompt-contents-base file-parts)
+                                         prompt-contents-base)))
+               (assert (list-of-content? prompt-contents)
+                       () "Prompt must be a list of content objects.")
+               (let ((payload (object :contents prompt-contents)))
+                 ;; Add other payload parts before counting tokens
+                 ;; Note:  Nominally, we'd want to do this, but the countTokens API rejects the payload if we do!
+      
+                 ;; (when cached-content (setf (get-cached-content payload) cached-content))
+                 ;; (when generation-config (setf (get-generation-config payload) generation-config))
+                 ;; (when safety-settings (setf (get-safety-settings payload) safety-settings))
+                 ;; (when system-instruction (setf (get-system-instruction payload) system-instruction))
+                 ;; (when tools (setf (get-tools payload) tools))
+                 ;; (when (and tools tool-config) (setf (get-tool-config payload) tool-config))
+
+                 (handler-case
+                     (let ((total-tokens (get-total-tokens
+                                          (with-timeout (+count-tokens-timeout+)
+                                            (%count-tokens model payload)))))
+                       (when (> total-tokens (- +max-prompt-tokens+ +max-prompt-tokens-padding+))
+                         (warn "Total token count (~d) exceeds ~d tokens." total-tokens (- +max-prompt-tokens+ +max-prompt-tokens-padding+))))
+                   (timeout-error (c)
+                     (declare (ignore c))
+                     (warn "Token counting timed out after ~d seconds." +count-tokens-timeout+)))
+
+                 ;; See above note.
+                 (when cached-content (setf (get-cached-content payload) cached-content))
+                 (when generation-config (setf (get-generation-config payload) generation-config))
+                 (when safety-settings (setf (get-safety-settings payload) safety-settings))
+                 (when system-instruction (setf (get-system-instruction payload) system-instruction))
+                 (when tools (setf (get-tools payload) tools))
+                 (when (and tools tool-config) (setf (get-tool-config payload) tool-config))
+
+                 (let reinvoke ((count 0)
+                                (temperature (and (get-generation-config payload)
+                                                  (get-temperature (get-generation-config payload)))))
+                   (if (> count 10)
+                       (error "Failed to get a valid response from Gemini after ~d attempts." count)
+                       ;; Adjust temperature and retry
+                       (progn
+                         (and temperature (if (get-generation-config payload)
+                                              (setf (get-temperature (get-generation-config payload)) temperature)
+                                              (setf (get-generation-config payload)
+                                                    (object :temperature temperature))))
+                         (or (funcall (function-caller prompt-contents #'reprompt)
+                              (print-text
+                               (strip-and-print-thoughts
+                                (print-token-usage
+                                 (error-check
+                                  (%invoke-gemini model payload))))))
+                             (progn (sleep count)
+                                    (reinvoke (+ count 1) (+ (or temperature 1.0) (/ (- 2.0 (or temperature 1.0)) 2.0))))))))))))
+    #'reprompt))
 
 (defparameter +max-prompt-tokens-padding+ 8192
   "Number of excess tokens that might be taken up that we cannot count.")
@@ -634,15 +735,16 @@
                                    (setf (get-generation-config payload)
                                          (object :temperature temperature))))
               (or (funcall (compose *output-processor* #'error-check) (%invoke-gemini *model* payload))
-                  (reinvoke (+ count 1) (+ (or temperature 1.0) (/ (- 2.0 (or temperature 1.0)) 2.0))))))))))
+                  (progn (sleep count)
+                         (reinvoke (+ count 1) (+ (or temperature 1.0) (/ (- 2.0 (or temperature 1.0)) 2.0)))))))))))
 
-(defun continue-gemini (content)
+(defun continue-gemini (content &key files)
   "Continues the conversation with the Gemini model using the provided CONTENT.
    CONTENT can be a content object, a part object, a string, a list of content objects,
    a list of part objects, or a list of strings.
    Returns the processed response from the API."
   (let ((*context* *prior-context*))
-    (invoke-gemini content :model *prior-model*)))
+    (invoke-gemini content :files files :model *prior-model*)))
 
 (defun invert-context (context)
   "Inverts the roles in the given CONTEXT.
