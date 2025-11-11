@@ -21,15 +21,19 @@
               (when next-page-token
                 (list-models next-page-token))))))
 
+(defparameter +count-tokens-timeout+ (* 60 2) ;; two minutes
+  "The timeout in seconds for counting tokens in the prompt.")
+
 (defun %count-tokens (model-id payload)
   "Invokes the Gemini API's countTokens endpoint."
-  (report-elapsed-time (format nil "Token counting for model `~a`" model-id)
-    (google:google-post
-     (concatenate 'string +gemini-api-base-url+ model-id ":countTokens")
-     (google:gemini-api-key)
-     payload)))
+  (with-timeout (+count-tokens-timeout+)
+    (report-elapsed-time (format nil "Token counting for model `~a`" model-id)
+      (google:google-post
+       (concatenate 'string +gemini-api-base-url+ model-id ":countTokens")
+       (google:gemini-api-key)
+       payload))))
 
-(defun %invoke-gemini (model-id payload)
+(defun %%invoke-gemini (model-id payload)
   "Invokes the Gemini API with the specified MODEL-ID and PAYLOAD.
    Returns the response from the API as a decoded JSON object.
    This is an internal helper function."
@@ -42,12 +46,15 @@
 (defun file->part (path &key (mime-type (guess-mime-type path)))
   "Reads a file from PATH, base64 encodes its content, and returns a content PART object
    suitable for the Gemini API."
-  (part
-   (object
-    :data (file->blob path)
-    :mime-type (if (string-equal "application/json" mime-type) ;; Gemini bug.
-                   "text/plain"
-                   mime-type))))
+  (let ((mime-type* (if (string-equal "application/json" mime-type) ;; Gemini bug.
+                        "text/plain"
+                        mime-type)))
+    (if (str:starts-with? "text/" mime-type*)
+        (part (uiop:read-file-string path))
+        (part
+         (object
+          :data (file->blob path)
+          :mime-type mime-type*)))))
 
 (defun prepare-file-parts (files)
   "Converts a list of file specifications into a list of PART objects.
@@ -223,66 +230,67 @@
 (defparameter *trace-function-calls* t
   "If true, function calls will be traced to *trace-output*.")
 
-(defun default-process-function-call (function-call-part)
-  (let* ((name (resolve-function-call-alias (get-name function-call-part)))
-         (args (get-args function-call-part))
-         (functions (standard-functions-and-handlers))
-         (entry (assoc name functions :key #'get-name :test #'equal))
-         (schema (and entry
-                      (get-properties
-                       (get-parameters
-                        (car entry)))))
-         (handler (and entry (cdr entry)))
-         (arglist (default-process-args args schema)))
-    (when *trace-function-calls*
-      (format *trace-output* "~&;; Invoking function: ~a(~{~s~^, ~})~%" name arglist)
-      (force-output *trace-output*))
-    (let ((response
-            (object :function-response
-                     (object 
-                      :name name
-                      :response (cond ((null entry)
-                                       (object :error (format nil "Function `~s` does not exist." name)
-                                                ))
-                                      ((null handler)
-                                       (object :error (format nil "Function `~s` has no handler." name)
-                                                ))
-                                      ((not (functionp handler))
-                                       (object :error (format nil "Handler for `~s` is not a function." name)
-                                                ))
-                                      (t 
-                                       (let ((answers nil)
-                                             (output-string nil)
-                                             (error-string nil))
-                                         (handler-case
-                                             (progn
-                                               (setq output-string
-                                                     (with-output-to-string (out)
-                                                       (let ((*standard-output* (make-broadcast-stream *standard-output* out)))
-                                                         (setq error-string
-                                                               (with-output-to-string (err)
-                                                                 (let ((*error-output* (make-broadcast-stream *error-output* err)))
-                                                                   (setq answers (multiple-value-list (apply handler arglist)))))))))
-                                               (if (consp answers)
-                                                   (if (consp (cdr answers))
-                                                       (object :result (car answers)
-                                                               :additional-results (coerce (cdr answers) 'vector)
-                                                               :standard-output output-string
-                                                               :error-output error-string)
-                                                       (object :result (car answers)
-                                                               :standard-output output-string
-                                                               :error-output error-string))
-                                                   (object :result jsonx:+json-null+
-                                                           :standard-output output-string
-                                                           :error-output error-string)))
-                                           (error (e)
-                                             (object :error (format nil "~a" e)
-                                                     :standard-output output-string
-                                                     :error-output error-string))))))))))
+(defun default-process-function-call (content-generator)
+  (lambda (function-call-part)
+    (let* ((name (resolve-function-call-alias (get-name function-call-part)))
+           (args (get-args function-call-part))
+           (functions (standard-functions-and-handlers content-generator))
+           (entry (assoc name functions :key #'get-name :test #'equal))
+           (schema (and entry
+                        (get-properties
+                         (get-parameters
+                          (car entry)))))
+           (handler (and entry (cdr entry)))
+           (arglist (default-process-args args schema)))
       (when *trace-function-calls*
-        (format *trace-output* "~&;; Function call response: ~s~%" (dehashify response))
+        (format *trace-output* "~&;; Invoking function: ~a(~{~s~^, ~})~%" name arglist)
         (force-output *trace-output*))
-      response)))
+      (let ((response
+              (object :function-response
+                      (object 
+                       :name name
+                       :response (cond ((null entry)
+                                        (object :error (format nil "Function `~s` does not exist." name)
+                                                ))
+                                       ((null handler)
+                                        (object :error (format nil "Function `~s` has no handler." name)
+                                                ))
+                                       ((not (functionp handler))
+                                        (object :error (format nil "Handler for `~s` is not a function." name)
+                                                ))
+                                       (t 
+                                        (let ((answers nil)
+                                              (output-string nil)
+                                              (error-string nil))
+                                          (handler-case
+                                              (progn
+                                                (setq output-string
+                                                      (with-output-to-string (out)
+                                                        (let ((*standard-output* (make-broadcast-stream *standard-output* out)))
+                                                          (setq error-string
+                                                                (with-output-to-string (err)
+                                                                  (let ((*error-output* (make-broadcast-stream *error-output* err)))
+                                                                    (setq answers (multiple-value-list (apply handler arglist)))))))))
+                                                (if (consp answers)
+                                                    (if (consp (cdr answers))
+                                                        (object :result (car answers)
+                                                                :additional-results (coerce (cdr answers) 'vector)
+                                                                :standard-output output-string
+                                                                :error-output error-string)
+                                                        (object :result (car answers)
+                                                                :standard-output output-string
+                                                                :error-output error-string))
+                                                    (object :result jsonx:+json-null+
+                                                            :standard-output output-string
+                                                            :error-output error-string)))
+                                            (error (e)
+                                              (object :error (format nil "~a" e)
+                                                      :standard-output output-string
+                                                      :error-output error-string))))))))))
+        (when *trace-function-calls*
+          (format *trace-output* "~&;; Function call response: ~s~%" (dehashify response))
+          (force-output *trace-output*))
+        response))))
 
 (defvar *accumulated-prompt-tokens* 0
   "Accumulated prompt token count across multiple API calls.")
@@ -378,7 +386,7 @@
                :generation-config (object :max-output-tokens (- +max-prompt-tokens+ 2048)))))
         (let retry ((temp 0.0))
           (setf (get-temperature (get-generation-config summarization-payload)) temp)
-          (let* ((summary-results (%invoke-gemini model summarization-payload))
+          (let* ((summary-results (%%invoke-gemini model summarization-payload))
                  (error (get-error summary-results)))
             (if error
                 (if (< temp 2.0)
@@ -523,20 +531,34 @@
   (lambda (results)
     (let ((function-calls (extract-function-calls-from-results results)))
       (assert (or (null function-calls) (list-of-parts? function-calls)) () "Expected function-calls to be a list of parts.")
-      (if function-calls
-          (let ((function-results (map 'list (compose #'default-process-function-call #'get-function-call)
-                                       function-calls)))
-            (assert (list-of-parts? function-results) () "Expected function-results to be a list of parts.")
-            (funcall recur (append prompt (list (content :parts function-results
-                                                         :role "function")))))
-          (or (and *return-text-string* (as-singleton-text-string results))
-              results)))))
+      (values
+       (if function-calls
+           (let ((function-results (map 'list (compose (default-process-function-call content-generator)
+                                                       #'get-function-call)
+                                        function-calls)))
+             (assert (list-of-parts? function-results) () "Expected function-results to be a list of parts.")
+             (funcall recur (append prompt (list
+                                            (content :parts function-calls
+                                                     :role "model")
+                                            (content :parts function-results
+                                                     :role "function")))))
+           (or (and *return-text-string* (as-singleton-text-string results))
+               results))
+       (let* ((candidates (get-candidates results))
+              (first-candidate (cond ((consp candidates) (car candidates))
+                                     ((and (vectorp candidates)
+                                           (> (length candidates) 0))
+                                      (svref candidates 0))
+                                     (t (error "No first candidate found."))))
+              (content (get-content first-candidate)))
+         (append prompt (list content)))))))
 
 (defun tail-call-functions (results)
   (let ((function-calls (extract-function-calls-from-results results)))
     (assert (or (null function-calls) (list-of-parts? function-calls)) () "Expected function-calls to be a list of parts.")
     (if function-calls
-        (let ((function-results (map 'list (compose #'default-process-function-call #'get-function-call)
+        (let ((function-results (map 'list (compose (default-process-function-call content-generator)
+                                                    #'get-function-call)
                                      function-calls)))
           (assert (list-of-parts? function-results) () "Expected function-results to be a list of parts.")
           (invoke-gemini
@@ -589,100 +611,27 @@
       (setf (get-text last-part)
             (format nil "**The topic of conversation is ~a.**" new-topic)))))
 
-(defparameter +count-tokens-timeout+ 60
-  "The timeout in seconds for counting tokens in the prompt.")
-
+;; Disable connection pooling for dexador to avoid issues with persistent connections.
+;; In particular, the countTokens endpoint seems to be prone to hanging.  It is unclear why,
+;; but disabling connection pooling seems to help.
 (eval-when (:load-toplevel :execute)
   (setq dexador.connection-cache:*use-connection-pool* nil))
-
-(defun content-generator (&key
-                          (cached-content (default-cached-content))
-                          (generation-config (default-generation-config))
-                          (model +default-model+)
-                          (tools (default-tools))
-                          (tool-config (default-tool-config))
-                          (safety-settings (default-safety-settings))
-                          (system-instruction (default-system-instruction)))
-  (labels ((reprompt (prompt &key files)
-             (let* ((file-parts (when files (prepare-file-parts files)))
-                    (prompt-contents-base (->prompt prompt))
-                    (prompt-contents (if file-parts
-                                         (merge-user-prompt-and-files prompt-contents-base file-parts)
-                                         prompt-contents-base)))
-               (assert (list-of-content? prompt-contents)
-                       () "Prompt must be a list of content objects.")
-               (let ((payload (object :contents prompt-contents)))
-                 ;; Add other payload parts before counting tokens
-                 ;; Note:  Nominally, we'd want to do this, but the countTokens API rejects the payload if we do!
-      
-                 ;; (when cached-content (setf (get-cached-content payload) cached-content))
-                 ;; (when generation-config (setf (get-generation-config payload) generation-config))
-                 ;; (when safety-settings (setf (get-safety-settings payload) safety-settings))
-                 ;; (when system-instruction (setf (get-system-instruction payload) system-instruction))
-                 ;; (when tools (setf (get-tools payload) tools))
-                 ;; (when (and tools tool-config) (setf (get-tool-config payload) tool-config))
-
-                 (handler-case
-                     (let ((total-tokens (get-total-tokens
-                                          (with-timeout (+count-tokens-timeout+)
-                                            (%count-tokens model payload)))))
-                       (when (> total-tokens (- +max-prompt-tokens+ +max-prompt-tokens-padding+))
-                         (warn "Total token count (~d) exceeds ~d tokens." total-tokens (- +max-prompt-tokens+ +max-prompt-tokens-padding+))))
-                   (timeout-error (c)
-                     (declare (ignore c))
-                     (warn "Token counting timed out after ~d seconds." +count-tokens-timeout+)))
-
-                 ;; See above note.
-                 (when cached-content (setf (get-cached-content payload) cached-content))
-                 (when generation-config (setf (get-generation-config payload) generation-config))
-                 (when safety-settings (setf (get-safety-settings payload) safety-settings))
-                 (when system-instruction (setf (get-system-instruction payload) system-instruction))
-                 (when tools (setf (get-tools payload) tools))
-                 (when (and tools tool-config) (setf (get-tool-config payload) tool-config))
-
-                 (let reinvoke ((count 0)
-                                (temperature (and (get-generation-config payload)
-                                                  (get-temperature (get-generation-config payload)))))
-                   (if (> count 10)
-                       (error "Failed to get a valid response from Gemini after ~d attempts." count)
-                       ;; Adjust temperature and retry
-                       (progn
-                         (and temperature (if (get-generation-config payload)
-                                              (setf (get-temperature (get-generation-config payload)) temperature)
-                                              (setf (get-generation-config payload)
-                                                    (object :temperature temperature))))
-                         (or (funcall (function-caller prompt-contents #'reprompt)
-                              (print-text
-                               (strip-and-print-thoughts
-                                (print-token-usage
-                                 (error-check
-                                  (%invoke-gemini model payload))))))
-                             (progn (sleep count)
-                                    (reinvoke (+ count 1) (+ (or temperature 1.0) (/ (- 2.0 (or temperature 1.0)) 2.0))))))))))))
-    #'reprompt))
 
 (defparameter +max-prompt-tokens-padding+ 8192
   "Number of excess tokens that might be taken up that we cannot count.")
 
-(defun invoke-gemini (prompt &key
-                               ((:model *model*) +default-model+)
-                               (files nil)
-                               (cached-content (default-cached-content))
-                               (generation-config (default-generation-config))
-                               (tools (default-tools))
-                               (tool-config (default-tool-config))
-                               (safety-settings (default-safety-settings))
-                               (system-instruction (default-system-instruction)))
+(defun generate-content (content-generator prompt files)
+  ;; Merge the files into the prompt.
   (let* ((file-parts (when files (prepare-file-parts files)))
-         (prompt-contents-base (->prompt prompt))
+         (prompt-contents-base (let ((*include-timestamp* (get-include-timestamp content-generator))
+                                     (*include-bash-history* (get-include-bash-history content-generator)))
+                                 (->prompt prompt)))
          (prompt-contents (if file-parts
                               (merge-user-prompt-and-files prompt-contents-base file-parts)
                               prompt-contents-base)))
     (assert (list-of-content? prompt-contents)
             () "Prompt must be a list of content objects.")
-    (setq *prior-model* *model*)
-    (let* ((*context* (revappend prompt-contents (current-context)))
-           (payload (object :contents (reverse *context*))))
+    (let ((payload (object :contents prompt-contents)))
       ;; Add other payload parts before counting tokens
       ;; Note:  Nominally, we'd want to do this, but the countTokens API rejects the payload if we do!
       
@@ -693,40 +642,39 @@
       ;; (when tools (setf (get-tools payload) tools))
       ;; (when (and tools tool-config) (setf (get-tool-config payload) tool-config))
 
-      ;; Check token count and compress if necessary
+      ;; Count the tokens.  Ideally we'd like to do something when the count exceeds the limit,
+      ;; but right now all we do is complain.
       (handler-case
-          (let* ((token-count-response (with-timeout (+count-tokens-timeout+)
-                                         (%count-tokens *model* payload)))
-                 (total-tokens (get-total-tokens token-count-response)))
-            (when (> total-tokens (- +max-prompt-tokens+ +max-prompt-tokens-padding+))
-              (format *trace-output* "~&;; Prompt token count (~d) exceeds ~d tokens, compressing context.~%"
-                      total-tokens (- +max-prompt-tokens+ +max-prompt-tokens-padding+))
-              (finish-output *trace-output*)
-              (setq *context* (compress-context *context* *model*))
-              ;; Rebuild payload with compressed context
-              (setq payload (object :contents (reverse *context*)))
-              ;; Re-add other payload parts
-              (when cached-content (setf (get-cached-content payload) cached-content))
-              (when generation-config (setf (get-generation-config payload) generation-config))
-              (when safety-settings (setf (get-safety-settings payload) safety-settings))))
+          (let iter ((total-tokens (get-total-tokens
+                                    (%count-tokens (get-model content-generator) payload))))
+            (when (> (+ total-tokens +max-prompt-tokens-padding+) +max-prompt-tokens+)
+              (warn "Prompt token count (~d) exceeds ~d tokens.  Truncating context."
+                    total-tokens +max-prompt-tokens+)
+              (pop (get-contents payload))
+              (iter (get-total-tokens
+                     (%count-tokens (get-model content-generator) payload)))))
         (timeout-error (c)
           (declare (ignore c))
-          (warn "Token counting timed out after ~d seconds. Proceeding without compression." +count-tokens-timeout+)))
+          (warn "Token counting timed out after ~d seconds." +count-tokens-timeout+)))
 
-      ;; See above note.
-      (when cached-content (setf (get-cached-content payload) cached-content))
-      (when generation-config (setf (get-generation-config payload) generation-config))
-      (when safety-settings (setf (get-safety-settings payload) safety-settings))
-      (when system-instruction (setf (get-system-instruction payload) system-instruction))
-      (when tools (setf (get-tools payload) tools))
-      (when (and tools tool-config) (setf (get-tool-config payload) tool-config))
+      (when (get-cached-content content-generator)
+        (setf (get-cached-content payload) (get-cached-content content-generator)))
+      (when (get-generation-config content-generator)
+        (setf (get-generation-config payload) (get-generation-config content-generator)))
+      (when (get-safety-settings content-generator)
+        (setf (get-safety-settings payload) (get-safety-settings content-generator)))
+      (when (get-system-instruction content-generator)
+        (setf (get-system-instruction payload) (get-system-instruction content-generator)))
+      (when (get-tools content-generator)
+        (setf (get-tools payload) (get-tools content-generator)))
+      (when (and (get-tools content-generator)
+                 (get-tool-config content-generator))
+        (setf (get-tool-config payload) (get-tool-config content-generator)))
 
-      (save-transcript *context*)
-      (setq *prior-context* *context*)
       (let reinvoke ((count 0)
                      (temperature (and (get-generation-config payload)
                                        (get-temperature (get-generation-config payload)))))
-        (if (> count 10)
+        (if (>= count 10)
             (error "Failed to get a valid response from Gemini after ~d attempts." count)
             ;; Adjust temperature and retry
             (progn
@@ -734,17 +682,262 @@
                                    (setf (get-temperature (get-generation-config payload)) temperature)
                                    (setf (get-generation-config payload)
                                          (object :temperature temperature))))
-              (or (funcall (compose *output-processor* #'error-check) (%invoke-gemini *model* payload))
-                  (progn (sleep count)
-                         (reinvoke (+ count 1) (+ (or temperature 1.0) (/ (- 2.0 (or temperature 1.0)) 2.0)))))))))))
+              ;; Invoke Gemini API.  If the count is 5 or more, we switch to the "gemini-pro-latest" model
+              ;; to try to get a better response.
+              (let ((response (%%invoke-gemini (if (< count 5)
+                                                   (get-model content-generator)
+                                                   "models/gemini-pro-latest")
+                                               payload)))
+                ;; Check for error response
+                (when (get-error response)
+                  (error "Error from Gemini (code ~d): ~a"
+                         (get-code (get-error response))
+                         (get-message (get-error response))))
+                ;; Process usage metadata
+                (let ((usage-metadata (get-usage-metadata response)))
+                  (when usage-metadata
+                    (process-usage-metadata usage-metadata)))
+                ;; Process the response - fetch first candidate
+                (let* ((response* (strip-and-print-thoughts response))
+                       (candidates (get-candidates response*))
+                       (first-candidate (cond ((consp candidates) (car candidates))
+                                              ((and (vectorp candidates)
+                                                    (> (length candidates) 0))
+                                               (svref candidates 0))
+                                              (t nil))))
+                  (print-text response*)
+                  (let ((function-calls (extract-function-calls-from-results response*)))
+                    (cond (function-calls
+                           (let ((function-results (map 'list (compose (default-process-function-call content-generator)
+                                                                       #'get-function-call)
+                                                        function-calls)))
+                             (assert (list-of-parts? function-results) ()
+                                     "Expected function-results to be a list of parts.")
+                             (generate-content content-generator
+                                               (append (get-contents payload)
+                                                       (list (get-content first-candidate)
+                                                             (content :parts function-results
+                                                                      :role "function")))
+                                               '())))
+                          (first-candidate
+                           (append (get-contents payload) (list (get-content first-candidate))))
+                          (t
+                           ;; fall through case - reinvoke with higher temperature
+                           (reinvoke (+ count 1)
+                                     (let ((temp (or temperature 1.0)))
+                                       (- 2.0 (/ (- 2.0 temp) 2)))))))))))))))
 
-(defun continue-gemini (content &key files)
-  "Continues the conversation with the Gemini model using the provided CONTENT.
-   CONTENT can be a content object, a part object, a string, a list of content objects,
-   a list of part objects, or a list of strings.
-   Returns the processed response from the API."
-  (let ((*context* *prior-context*))
-    (invoke-gemini content :files files :model *prior-model*)))
+(defun chatbot (content-generator)
+  "A chatbot is a content generator that accumulates conversation history."
+  (let ((conversation nil))
+    (labels ((reprompt (prompt &key files)
+               (let* ((file-parts (when files (prepare-file-parts files)))
+                      (prompt-contents-base (let ((*include-timestamp* (get-include-timestamp content-generator))
+                                                  (*include-bash-history* (get-include-bash-history content-generator)))
+                                              (->prompt prompt)))
+                      (prompt-contents (if file-parts
+                                           (merge-user-prompt-and-files prompt-contents-base file-parts)
+                                           prompt-contents-base)))
+                 (assert (list-of-content? prompt-contents)
+                         () "Prompt must be a list of content objects.")
+                 (setq conversation
+                       (funcall content-generator (append conversation prompt-contents))))))
+      #'reprompt)))
+
+;;; Persona management
+
+(defun personas-directory ()
+  "Returns the directory where persona configurations are stored."
+  (merge-pathnames
+   (make-pathname :directory '(:relative ".personas"))
+   (user-homedir-pathname)))
+
+(defun persona-directory (persona-name)
+  "Returns the directory for a specific persona."
+  (merge-pathnames
+   (make-pathname :directory (list :relative persona-name))
+   (personas-directory)))
+
+(defun persona-config-file (persona-name)
+  "Returns the configuration file path for a specific persona."
+  (merge-pathnames
+   (make-pathname :name "config" :type "lisp")
+   (persona-directory persona-name)))
+
+(defun load-persona-config (persona-name)
+  "Makes a persona config instance by reading key-value pairs from the persona's config file."
+  (apply #'make-instance 'persona-config
+         :name persona-name
+         (file->form-list (persona-config-file persona-name))))
+
+(defun persona-memory-file (persona-config)
+  "Returns the memory file path for a specific persona."
+  (merge-pathnames
+   (get-memory-filepath persona-config)
+   (persona-directory (get-name persona-config))))
+
+(defun persona-diary-directory (persona-config)
+  "Returns the diary directory path for a specific persona."
+  (merge-pathnames
+   (get-diary-directory persona-config)
+   (persona-directory (get-name persona-config))))
+
+(defun persona-diary-files (persona-config)
+  "Returns a sorted list of diary file paths for a specific persona."
+  (let ((diary-dir (persona-diary-directory persona-config)))
+    (when (probe-file diary-dir)
+      (sort (directory (merge-pathnames
+                        (make-pathname :name :wild :type "txt")
+                        diary-dir))
+            #'<
+            :key (compose #'parse-integer #'pathname-name)))))
+
+(defun persona-system-instruction-filepath (persona-config)
+  "Returns the system instruction file path for a specific persona."
+  (merge-pathnames
+   (get-system-instruction-filepath persona-config)
+   (persona-directory (get-name persona-config))))
+
+(defun persona-system-instructions-filepath (persona-config)
+  "Returns the system instructions file path for a specific persona."
+  (merge-pathnames
+   (get-system-instructions-filepath persona-config)
+   (persona-directory (get-name persona-config))))
+
+(defun create-default-personas ()
+  "Create a default persona configuration in the personas directory."
+  (let ((default-persona-name "Default")
+        (gemini-flash-name "GeminiFlash")
+        (gemini-pro-name "GeminiPro"))
+    (ensure-directories-exist (persona-directory default-persona-name))
+    (ensure-directories-exist (persona-directory gemini-flash-name))
+    (ensure-directories-exist (persona-directory gemini-pro-name))
+    (unless (probe-file (persona-config-file default-persona-name))
+      (with-open-file (out (persona-config-file default-persona-name)
+                           :direction :output
+                           :if-exists :supersede
+                           :if-does-not-exist :create)
+        (format out ";;; Default persona configuration~%")))
+    (unless (probe-file (persona-config-file gemini-flash-name))
+      (with-open-file (out (persona-config-file gemini-flash-name)
+                           :direction :output
+                           :if-exists :supersede
+                           :if-does-not-exist :create)
+        (format out ":model ~s" "models/gemini-flash-latest~%")))
+    (unless (probe-file (persona-config-file gemini-pro-name))
+      (with-open-file (out (persona-config-file gemini-pro-name)
+                           :direction :output
+                           :if-exists :supersede
+                           :if-does-not-exist :create)
+        (format out ":model ~s" "models/gemini-pro-latest~%")))
+    (let* ((persona-config (load-persona-config default-persona-name))
+           (memory-pathname (persona-memory-file persona-config))
+           (system-instruction-pathname (persona-system-instruction-filepath persona-config))
+           (diary-directory (persona-diary-directory persona-config)))
+      (unless (probe-file memory-pathname)
+        (with-open-file (out memory-pathname
+                             :direction :output
+                             :if-exists :supersede
+                             :if-does-not-exist :create)))
+      (unless (probe-file system-instruction-pathname)
+        (with-open-file (out system-instruction-pathname
+                             :direction :output
+                             :if-exists :supersede
+                             :if-does-not-exist :create)
+          (format out "You are a helpful and friendly AI assistant.~%")))
+      (ensure-directories-exist diary-directory)
+      (unless (probe-file (merge-pathnames
+                           (make-pathname :name "1" :type "txt")
+                           diary-directory))
+        (with-open-file (out (merge-pathnames
+                              (make-pathname :name "1" :type "txt")
+                              diary-directory)
+                             :direction :output
+                             :if-exists :supersede
+                             :if-does-not-exist :create)
+          (format out "Dear Diary,~%Today I started my life as an AI persona.~%"))))))
+
+(eval-when (:load-toplevel :execute)
+  (create-default-personas))
+
+(defun load-content-generator (config)
+  "Loads a content generator for the specified CONFIG."
+  (if (slot-boundp config 'temperature)
+      (setq *temperature* (get-temperature config))
+      (setq *temperature* nil))
+  (make-instance 'content-generator :config config))
+
+(defun merge-narrative-memory-into-prompt (prompt memory-file)
+  "Merges the narrative memory of a persona into the prompt."
+  (let* ((memory-parts (when (probe-file memory-file)
+                         (list (part (uiop:read-file-string memory-file)))))
+         (memory-narrative
+           (funcall *gemini-flash*
+                    (cons (part "Write a chapter of a story in the style of Raymond Chandler based on the following sematic triplets.")
+                          memory-parts))))
+    (if memory-narrative
+        (let ((memory-content (content :parts (coerce (get-parts (car (last memory-narrative))) 'list)
+                                       :role "model")))
+          (append (list memory-content) (->prompt prompt)))
+        (->prompt prompt))))
+
+(defun reload-persona (persona-name prompt)
+  "Reloads a persona from disk and returns a chatbot function configured for that persona."
+  (let* ((config (load-persona-config persona-name))
+         (content-generator (load-content-generator config))
+         (persona (chatbot content-generator))
+         (memory-file (persona-memory-file config))
+         (files (if (and (probe-file memory-file)
+                         (not (get-narrative-memory config)))
+                    (cons memory-file
+                          (persona-diary-files config))
+                    (persona-diary-files config))))
+      (if files
+          (funcall persona (if (and (probe-file memory-file)
+                                    (get-narrative-memory config))
+                               (merge-narrative-memory-into-prompt prompt memory-file)
+                               prompt)
+                   :files files)
+          (funcall persona (if (and (probe-file memory-file)
+                                    (get-narrative-memory config))
+                               (merge-narrative-memory-into-prompt prompt memory-file)
+                               prompt)))
+      persona))
+
+(defvar *default*)
+(defvar *gemini-pro*)
+(defvar *gemini-flash*)
+
+(eval-when (:load-toplevel :execute)
+  (unless (boundp '*default-persona*)
+    (setf *default-persona* (reload-persona "Default" "Hello!")))
+  (unless (boundp '*gemini-pro*)
+    (setf *gemini-pro* (reload-persona "GeminiPro" "Hello!")))
+  (unless (boundp '*gemini-flash*)
+    (setf *gemini-flash* (reload-persona "GeminiFlash" "Hello!"))))
+
+(defun gemini-flash (prompt &key files)
+  (funcall *gemini-flash* prompt :files files))
+
+(defun gemini-pro (prompt &key files)
+  (funcall *gemini-pro* prompt :files files))
+
+;;; Simple one persona chat interface.
+
+(defparameter *chat-persona* nil
+  "The current chat persona function.")
+
+(defun new-chat (persona-name prompt)
+  "Initializes a new chat session with the specified PERSONA-NAME and PROMPT.
+   Sets the global *chat-persona* variable to a chatbot function configured for the persona."
+  (setq *chat-persona* (reload-persona persona-name prompt)))
+
+(defun chat (prompt)
+  "Sends a PROMPT to the current chat persona and returns the response."
+  (funcall *chat-persona* prompt)
+  nil)
+
+;;; Debate framework
 
 (defun invert-context (context)
   "Inverts the roles in the given CONTEXT.
@@ -756,3 +949,16 @@
                                    (t (get-role content)))))
        context))
 
+(defun debate (first-generator second-generator initial-prompt n-rounds)
+  (let iter ((generator-a first-generator)
+             (generator-b second-generator)
+             (context (->prompt initial-prompt))
+             (round 0))
+    (when (<= round n-rounds)
+      (sleep 5)
+      (iter generator-b
+        generator-a
+        (invert-context
+         (funcall generator-a context))
+        (+ round 1)))))
+    

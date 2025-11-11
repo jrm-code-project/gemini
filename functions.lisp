@@ -30,7 +30,7 @@
                       (subseq namestring 2)))
         (t namestring)))
 
-(defun standard-functions-and-handlers ()
+(defun standard-functions-and-handlers (content-generator)
   "Return a list of standard functions and their handlers."
   (macrolet ((gnutil (name description)
                `(when *enable-gnutils*
@@ -58,7 +58,7 @@
                       :ignore-error-status t))))))
 
     (append
-     (mcp-functions-and-handlers)
+     (mcp-functions-and-handlers content-generator)
 
      (remove
       nil
@@ -1254,23 +1254,6 @@ This `bash` access empowers you to perform a wide array of system-level operatio
                 jsonx:+json-false+))))
        )))))
 
-(defun mcp-functions-and-handlers ()
-  "Extracts the list of functions supplied by the MCP servers."
-  (fold-left (binary-compose-right #'append #'get-mcp-functions-and-handlers) nil
-             (remove (find-mcp-server "memory") *mcp-servers*)))
-
-(defun transform-description (input-string)
-  "Transforms the description string by looking for _ characters, uppercasing the next character, and removing the _."
-  (with-output-to-string (output-string)
-    (with-input-from-string (str input-string)
-      (loop for char = (read-char str nil)
-            while char
-            do (if (char= char #\_)
-                   (let ((next-char (read-char str nil)))
-                     (when next-char
-                       (write-char (char-upcase next-char) output-string)))
-                   (write-char char output-string))))))
-
 (defun convert-property (prop)
   (cons (if (keywordp (car prop))
             (car prop)
@@ -1283,6 +1266,18 @@ This `bash` access empowers you to perform a wide array of system-level operatio
           :required (or (get-required input-schema)
                         #())))
                               
+(defun transform-description (input-string)
+  "Transforms the description string by looking for _ characters, uppercasing the next character, and removing the _."
+  (with-output-to-string (output-string)
+    (with-input-from-string (str input-string)
+      (loop for char = (read-char str nil)
+            while char
+            do (if (char= char #\_)
+                   (let ((next-char (read-char str nil)))
+                     (when next-char
+                       (write-char (char-upcase next-char) output-string)))
+                   (write-char char output-string))))))
+
 (defun convert-tool (mcp-server tool)
   "Converts an MCP tool to a function specification."
   (let ((input-schema (convert-input-schema (get-input-schema tool)))
@@ -1308,3 +1303,13 @@ This `bash` access empowers you to perform a wide array of system-level operatio
   (when (and (mcp-server-alive? mcp-server)
              (tools-capability mcp-server))
     (map 'list (lambda (tool) (convert-tool mcp-server tool)) (get-tools mcp-server))))
+
+(defun mcp-functions-and-handlers (content-generator)
+  "Extracts the list of functions supplied by the MCP servers."
+  (fold-left (binary-compose-right #'append #'get-mcp-functions-and-handlers) nil
+             (cons (get-memory-mcp-server content-generator)
+                   (remove (find-mcp-server "memory") *mcp-servers*))))
+
+
+
+

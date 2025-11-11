@@ -72,9 +72,9 @@
   (assert (not (string= keystring "")) () "Key string cannot be empty.")
   (assert (every
            (lambda (char)
-            (or (and (>= char #\a) (<= char #\z))
-                (and (>= char #\A) (<= char #\Z))
-                (and (>= char #\0) (<= char #\9))
+            (or (and (char>= char #\a) (char<= char #\z))
+                (and (char>= char #\A) (char<= char #\Z))
+                (and (char>= char #\0) (char<= char #\9))
                 (char= char #\_)
                 (char= char #\-)))
           keystring)
@@ -475,6 +475,7 @@ Does not add values to ALISTS."
       ((string-equal extension "jpg")  "image/jpeg")
       ((string-equal extension "json") "application/json")
       ((string-equal extension "lisp") "text/plain") ; Common Lisp files are plain text
+      ((string-equal extension "md")   "text/markdown")
       ((string-equal extension "pdf")  "application/pdf")
       ((string-equal extension "png")  "image/png")
       ((string-equal extension "txt")  "text/plain")
@@ -548,3 +549,14 @@ Does not add values to ALISTS."
         (str:join #\newline
                   (subseq lines 1 (1- (length lines))))
         string)))
+
+(defun stream->form-list (stream)
+  "Reads all Lisp forms from a STREAM and returns them as a list."
+  (collect 'list (scan-stream stream)))
+
+(defun file->form-list (pathname)
+  "Reads all Lisp forms from a file at PATHNAME and returns them as a list.
+   Returns NIL if the file does not exist or is empty.
+   Uses a tail-recursive helper with an accumulator for stack-safe efficiency."
+  (with-open-file (stream pathname :direction :input :if-does-not-exist nil)
+    (and stream (stream->form-list stream))))

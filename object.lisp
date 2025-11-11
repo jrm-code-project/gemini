@@ -37,7 +37,9 @@
   :function-response
   :generation-config
   :id 
+  :include-bash-history
   :include-context
+  :include-timestamp
   :index
   :inline-data
   :input-schema
@@ -56,12 +58,14 @@
   :maximum
   :mcp-servers
   :media-resolution
+  :memory-mcp-server
   :message
   :messages
   :metadata
   :method
   :mime-type
   :minimum
+  :model
   :model-version
   :name
   :next-cursor
@@ -484,3 +488,137 @@
     (when required-supplied-p
       (setf (get-required schema) required))
     schema))
+
+
+(defclass persona-config ()
+  ((name :initarg :name :accessor get-name)
+   (cached-content       :initarg :cached-content       :initform nil :accessor get-cached-content)
+   (diary-directory      :initarg :diary-directory      :initform (make-pathname :directory (list :relative "Diary"))
+                         :accessor get-diary-directory)
+   (generation-config    :initarg :generation-config :accessor %get-generation-config)
+   (include-bash-history :initarg :include-bash-history :initform nil :accessor get-include-bash-history)
+   (include-timestamp    :initarg :include-timestamp    :initform nil :accessor get-include-timestamp)
+   (memory-filepath      :initarg :memory-filepath      :initform (make-pathname :name "memory" :type "json")
+                         :accessor get-memory-filepath)
+   (model                :initarg :model                :initform +default-model+ :accessor get-model)
+   (narrative-memory     :initarg :narrative-memory     :initform nil :reader get-narrative-memory)
+   (system-instruction-filepath :initarg :system-instruction-filepath
+                                :initform (make-pathname :name "system-instruction" :type "md")
+                                :accessor get-system-instruction-filepath)
+   (system-instructions-filepath :initarg :system-instructions-filepath
+                                :initform (make-pathname :name "system-instructions" :type "md")
+                                :accessor get-system-instructions-filepath)
+   (safety-settings      :initarg :safety-settings      :initform nil :accessor get-safety-settings)
+   (temperature          :initarg :temperature          :accessor get-temperature)
+   (tool-config          :initarg :tool-config          :initform nil :accessor get-tool-config))
+   
+  (:documentation "Class representing persona configuration."))
+
+(defmethod get-generation-config ((object persona-config))
+  (if (slot-boundp object 'generation-config)
+      (slot-value object 'generation-config)
+      (let ((generation-config (object)))
+
+        (when (and (slot-boundp object 'safety-settings)
+                   (slot-value object 'safety-settings))
+          (setf (get-safety-settings generation-config) (get-safety-settings object)))
+
+        (when (slot-boundp object 'temperature)
+          (setf (get-temperature generation-config) (get-temperature object)))
+
+        (unless (zerop (hash-table-count generation-config))
+          generation-config))))
+
+(defmethod get-system-instruction ((object persona-config))
+  (or (let ((filepath (get-system-instruction-filepath object)))
+        (when (and filepath (probe-file filepath))
+          (content :parts (list (part (uiop:read-file-string filepath)))
+                   :role "system")))
+      (let ((filepath (get-system-instructions-filepath object)))
+        (when (and filepath (probe-file filepath))
+          (content :parts (map 'list
+                               (lambda (line) (part line))
+                               (file->paragraphs filepath))
+                   :role "system")))))
+#|
+(defun retarget-memory-config (memory-config memory-file)
+  `((:COMMAND . ,@(cdr (assoc :command memory-config)))
+    (:ARGS    ,@(append (butlast (cdr (assoc :args memory-config))) (list memory-file)))
+    (:ENV     . ,@(map 'list (lambda (env-pair)
+                               (if (string-equal (car env-pair) "MEMORY_FILE_PATH")
+                                   (
+                                   
+
+
+                                   (cons 
+                        (cons (car env-pair)
+                              (format nil "~a" (cdr env-pair))))
+                      (cdr (assoc :env memory-config))))))
+
+(defmethod get-tools ((object persona-config))
+  (remove
+   nil
+   (list
+    (when (enable-memory? object)
+      (let ((config
+              (retarget-memory-config
+               (cdr (assoc "memory" (cdr (assoc :mcp-servers (read-mcp-config))) :test #'string-equal)))
+
+(defmethod get-tools ((object persona-config))
+  nil)
+|#
+
+
+(defclass content-generator ()
+  ((config :initarg :config :accessor get-config)
+   (memory-mcp-server :reader get-memory-mcp-server))
+  
+  (:documentation "Class representing a content generator with a persona configuration.")
+  (:metaclass sb-mop:funcallable-standard-class))
+
+(defmethod initialize-instance :after ((instance content-generator) &key config &allow-other-keys)
+  "Initializes the content generator instance."
+  (sb-mop:set-funcallable-instance-function
+   instance
+   (lambda (prompt &key files) (generate-content instance prompt files))))
+
+(defmethod shared-initialize :after ((instance content-generator) slot-names &key config &allow-other-keys)
+  "Initializes the content generator instance."
+  (setf (slot-value instance 'memory-mcp-server)
+        (memory-mcp-server (persona-memory-file config))))
+
+
+
+(defmethod get-cached-content ((object content-generator))
+  (get-cached-content (get-config object)))
+
+(defmethod get-include-bash-history ((object content-generator))
+  (get-include-bash-history (get-config object)))
+
+(defmethod get-include-timestamp ((object content-generator))
+  (get-include-timestamp (get-config object)))
+
+(defmethod get-generation-config ((object content-generator))
+  (get-generation-config (get-config object)))
+
+(defmethod get-model ((object content-generator))
+  (get-model (get-config object)))
+
+(defmethod get-safety-settings ((object content-generator))
+  (get-safety-settings (get-config object)))
+
+(defmethod get-system-instruction ((object content-generator))
+  (get-system-instruction (get-config object)))
+
+;; In object.lisp
+(defmethod get-tools ((object content-generator))
+  "Returns a vector containing a single Tool object, which holds all function declarations."
+  (let ((declarations (map 'vector #'car (standard-functions-and-handlers object))))
+    (when (and declarations (> (length declarations) 0))
+      ;; The API expects a *vector* of Tool objects.
+      ;; We are providing one Tool object that contains all declarations.
+      (vector (object :function-declarations declarations)))))
+
+(defmethod get-tool-config ((object content-generator))
+  "Fetch the tool configuration for the content generator."
+  (get-tool-config (get-config object)))

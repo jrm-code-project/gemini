@@ -2,7 +2,7 @@
 
 (in-package "GEMINI")
 
-(defparameter +triple-parser-model+ "models/gemini-flash-lite-latest")
+(defparameter +triple-parser-model+ "models/gemini-flash-latest")
 
 (defparameter  +parse-triple-system-instruction+
   "Your function is to operate as a semantic extractor. For each user-provided paragraph, your sole task is to identify all distinct entities and the directed relations between them. You must output a single JSON object containing two top-level keys: `entities` and `relations`.

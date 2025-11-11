@@ -397,6 +397,24 @@
   (setq *mcp-servers* nil)
   (start-mcp-servers))
 
+(defun memory-config (memory-file)
+  (let ((config (read-mcp-config)))
+    (when config
+      (let ((memory-config (cdr (assoc "memory" (cdr (assoc :mcp-servers config)) :test #'equal))))
+        `(,(assoc :command memory-config)
+          (:ARGS ,(append (butlast (cdr (assoc :args memory-config)))
+                          (list (namestring memory-file))))
+          (:ENV ,@(map 'list (lambda (env-var)
+                              (cond ((equal (car env-var) "MEMORY_FILE_PATH")
+                                     (cons "MEMORY_FILE_PATH" (namestring memory-file)))
+                                    (t env-var)))
+                      (cdr (assoc :env memory-config))))
+          ,(assoc :system-instruction memory-config))))))
+
+(defun memory-mcp-server (memory-file)
+  "Create an MCP server instance for the memory server."
+  (create-mcp-server "Memory" (memory-config memory-file)))
+
 (defun find-tool (mcp-server tool-name)
   "Find a tool by name in the MCP server."
   (find tool-name (get-tools mcp-server) :test #'equal :key #'get-name))
