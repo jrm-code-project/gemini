@@ -620,7 +620,81 @@
 (defparameter +max-prompt-tokens-padding+ 8192
   "Number of excess tokens that might be taken up that we cannot count.")
 
-(defun generate-content (content-generator prompt files)
+(defun personalities-file ()
+  (merge-pathnames
+   (make-pathname :name "personalities"
+                  :type "txt")
+   (asdf:system-source-directory "gemini")))
+
+(defun up-to-sharp (string)
+  (let ((sharp-pos (position #\# string)))
+    (if sharp-pos
+        (subseq string 0 sharp-pos)
+        string)))
+
+(defun non-blank-string-p (string)
+  (and (stringp string)
+       (not (string= "" string))))
+
+(defun personalities ()
+  (collect 'list 
+    (choose-if #'non-blank-string-p
+               (map-fn 'string #'str:trim
+                       (map-fn 'string #'up-to-sharp
+                               (scan-file (personalities-file) #'read-line))))))
+
+(defparameter *personality-offset* 0
+  "An offset to apply to the daily personality index.")
+
+(defun new-personality ()
+  (setq *enable-personality* t
+        *personality-offset* (random (length (personalities)))))
+  
+(defun call-without-personality (thunk)
+  "Binds *enable-personality* to nil and calls the thunk."
+  (let ((*enable-personality* nil))
+    (funcall thunk)))
+
+(defmacro without-personality (&body body)
+  "Executes body with the personality system disabled."
+  `(CALL-WITHOUT-PERSONALITY (LAMBDA () ,@body)))
+
+(defun todays-personality ()
+  (multiple-value-bind (sec min hour day mon year dow dst tz)
+      (decode-universal-time (get-universal-time))
+    (declare (ignore sec min hour year dow dst tz))
+    (cond ((and (= mon 9) (= day 19)) "a pirate. Arrr!")
+          ((and (= mon 10) (= day 31)) "a spooky ghost.")
+          ((and (= mon 11) (= day 11)) "a World War I soldier.")
+          ((and (= mon 12) (= day 25)) "the ghost of Christmas Past.")
+          (t
+           (elt (personalities) (mod (+ (absolute-day) *personality-offset*) (length (personalities))))))))
+
+(defun compute-system-instruction-contents (content-generator system-instruction)
+  (append
+   (or (and system-instruction
+            (if (consp system-instruction)
+                system-instruction
+                (list system-instruction)))
+       (when *enable-personality*
+         (or (get-system-instruction content-generator)
+             (list (format nil "You will frame all answers in the style of ~a  It is important that you not break character."
+                           (todays-personality))))))
+   (mappend (lambda (server)
+              (when (mcp-server-alive? server)
+                (append (get-instructions server)
+                        (get-server-instructions server))))
+            (cons (get-memory-mcp-server content-generator)
+                  (remove (find-mcp-server "memory") *mcp-servers* :test #'eq)))))
+
+(defun compute-system-instruction (content-generator system-instruction)
+  "Computes the system instruction content based on the content generator and optional override."
+  (let ((contents (compute-system-instruction-contents content-generator system-instruction)))
+    (when contents
+      (content :parts (map 'list #'part contents)
+               :role "system"))))
+
+(defun generate-content (content-generator prompt files system-instruction)
   ;; Merge the files into the prompt.
   (let* ((file-parts (when files (prepare-file-parts files)))
          (prompt-contents-base (let ((*include-timestamp* (get-include-timestamp content-generator))
@@ -663,8 +737,9 @@
         (setf (get-generation-config payload) (get-generation-config content-generator)))
       (when (get-safety-settings content-generator)
         (setf (get-safety-settings payload) (get-safety-settings content-generator)))
-      (when (get-system-instruction content-generator)
-        (setf (get-system-instruction payload) (get-system-instruction content-generator)))
+      (let ((system-instruction (compute-system-instruction content-generator system-instruction)))
+        (when system-instruction
+          (setf (get-system-instruction payload) system-instruction)))
       (when (get-tools content-generator)
         (setf (get-tools payload) (get-tools content-generator)))
       (when (and (get-tools content-generator)
@@ -718,7 +793,8 @@
                                                        (list (get-content first-candidate)
                                                              (content :parts function-results
                                                                       :role "function")))
-                                               '())))
+                                               '()
+                                               system-instruction)))
                           (first-candidate
                            (append (get-contents payload) (list (get-content first-candidate))))
                           (t
@@ -873,8 +949,12 @@
                          (list (part (uiop:read-file-string memory-file)))))
          (memory-narrative
            (funcall *gemini-flash*
-                    (cons (part "Write a chapter of a story in the style of Raymond Chandler based on the following sematic triplets.")
-                          memory-parts))))
+                    (cons (part "Write a chapter of a story based on the following sematic triplets.")
+                          memory-parts)
+                    :system-instruction
+                    (content
+                     :parts (list (part "You are a noir novelist AI who writes in the style of Raymond Chandler. Your writing is atmospheric, moody, and rich in detail. You excel at creating complex characters and intricate plots filled with suspense and intrigue."))
+                     :role "system"))))
     (if memory-narrative
         (let ((memory-content (content :parts (coerce (get-parts (car (last memory-narrative))) 'list)
                                        :role "model")))
@@ -904,7 +984,7 @@
                                prompt)))
       persona))
 
-(defvar *default*)
+(defvar *default-persona*)
 (defvar *gemini-pro*)
 (defvar *gemini-flash*)
 

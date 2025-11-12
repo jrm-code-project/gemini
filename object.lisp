@@ -530,44 +530,18 @@
           generation-config))))
 
 (defmethod get-system-instruction ((object persona-config))
-  (or (let ((filepath (get-system-instruction-filepath object)))
-        (when (and filepath (probe-file filepath))
-          (content :parts (list (part (uiop:read-file-string filepath)))
-                   :role "system")))
-      (let ((filepath (get-system-instructions-filepath object)))
-        (when (and filepath (probe-file filepath))
-          (content :parts (map 'list
-                               (lambda (line) (part line))
-                               (file->paragraphs filepath))
-                   :role "system")))))
-#|
-(defun retarget-memory-config (memory-config memory-file)
-  `((:COMMAND . ,@(cdr (assoc :command memory-config)))
-    (:ARGS    ,@(append (butlast (cdr (assoc :args memory-config))) (list memory-file)))
-    (:ENV     . ,@(map 'list (lambda (env-pair)
-                               (if (string-equal (car env-pair) "MEMORY_FILE_PATH")
-                                   (
-                                   
+  (let ((filepath (or (and (slot-boundp object 'system-instruction-filepath)
+                           (slot-value object 'system-instruction-filepath))
+                      (get-system-instruction-filepath object))))
+    (and (probe-file filepath)
+         (uiop:read-file-string filepath))))
 
-
-                                   (cons 
-                        (cons (car env-pair)
-                              (format nil "~a" (cdr env-pair))))
-                      (cdr (assoc :env memory-config))))))
-
-(defmethod get-tools ((object persona-config))
-  (remove
-   nil
-   (list
-    (when (enable-memory? object)
-      (let ((config
-              (retarget-memory-config
-               (cdr (assoc "memory" (cdr (assoc :mcp-servers (read-mcp-config))) :test #'string-equal)))
-
-(defmethod get-tools ((object persona-config))
-  nil)
-|#
-
+(defmethod get-system-instructions ((object persona-config))
+  (let ((filepath (or (and (slot-boundp object 'system-instructions-filepath)
+                           (slot-value object 'system-instructions-filepath))
+                      (get-system-instructions-filepath object))))
+    (and (probe-file filepath)
+         (file->paragraphs filepath))))
 
 (defclass content-generator ()
   ((config :initarg :config :accessor get-config)
@@ -580,14 +554,13 @@
   "Initializes the content generator instance."
   (sb-mop:set-funcallable-instance-function
    instance
-   (lambda (prompt &key files) (generate-content instance prompt files))))
+   (lambda (prompt &key files system-instruction)
+     (generate-content instance prompt files system-instruction))))
 
 (defmethod shared-initialize :after ((instance content-generator) slot-names &key config &allow-other-keys)
   "Initializes the content generator instance."
   (setf (slot-value instance 'memory-mcp-server)
         (memory-mcp-server (persona-memory-file config))))
-
-
 
 (defmethod get-cached-content ((object content-generator))
   (get-cached-content (get-config object)))
@@ -608,9 +581,9 @@
   (get-safety-settings (get-config object)))
 
 (defmethod get-system-instruction ((object content-generator))
-  (get-system-instruction (get-config object)))
+  (or (get-system-instruction (get-config object))
+      (get-system-instructions (get-config object))))
 
-;; In object.lisp
 (defmethod get-tools ((object content-generator))
   "Returns a vector containing a single Tool object, which holds all function declarations."
   (let ((declarations (map 'vector #'car (standard-functions-and-handlers object))))

@@ -2,6 +2,10 @@
 
 (in-package "GEMINI")
 
+;;;;;;;;
+;;; Model-Context-Protocol (MCP) Server Support
+;;;;;;;;
+
 (defun mcp-config-pathname ()
   (uiop/configuration:xdg-config-pathname "mcp/mcp.lisp"))
 
@@ -89,7 +93,7 @@
         resource-template
         (let ((close-curly (position #\} resource-template :start open-curly)))
           (if (null close-curly)
-              (error "Unbalance curly braces in ~s." resource-template)
+              (error "Unbalanced curly braces in ~s." resource-template)
               (let ((before  (subseq resource-template 0  open-curly))
                     (between (->keyword (subseq resource-template (1+ open-curly) close-curly)))
                     (after   (subseq resource-template (1+ close-curly) (length resource-template))))
@@ -402,8 +406,8 @@
     (when config
       (let ((memory-config (cdr (assoc "memory" (cdr (assoc :mcp-servers config)) :test #'equal))))
         `(,(assoc :command memory-config)
-          (:ARGS ,(append (butlast (cdr (assoc :args memory-config)))
-                          (list (namestring memory-file))))
+          (:ARGS ,@(append (butlast (cdr (assoc :args memory-config)))
+                           (list (namestring memory-file))))
           (:ENV ,@(map 'list (lambda (env-var)
                               (cond ((equal (car env-var) "MEMORY_FILE_PATH")
                                      (cons "MEMORY_FILE_PATH" (namestring memory-file)))

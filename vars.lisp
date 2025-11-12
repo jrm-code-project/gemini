@@ -280,53 +280,6 @@
 
 (defparameter *mcp-servers* nil)
 
-(defun personalities-file ()
-  (merge-pathnames
-   (make-pathname :name "personalities"
-                  :type "txt")
-   (asdf:system-source-directory "gemini")))
-
-(defun up-to-sharp (string)
-  (let ((sharp-pos (position #\# string)))
-    (if sharp-pos
-        (subseq string 0 sharp-pos)
-        string)))
-
-(defun non-blank-string-p (string)
-  (and (stringp string)
-       (not (string= "" string))))
-
-(defun personalities ()
-  (collect 'list 
-    (choose-if #'non-blank-string-p
-               (map-fn 'string #'str:trim
-                       (map-fn 'string #'up-to-sharp
-                               (scan-file (personalities-file) #'read-line))))))
-
-(defparameter *personality-offset* 0)
-
-(defun new-personality ()
-  (setq *enable-personality* t
-        *personality-offset* (random (length (personalities)))))
-
-(defun todays-personality ()
-  (multiple-value-bind (sec min hour day mon year dow dst tz)
-      (decode-universal-time (get-universal-time))
-    (declare (ignore sec min hour year dow dst tz))
-    (cond ((and (= mon 9) (= day 19)) "a pirate. Arrr!")
-          ((and (= mon 10) (= day 31)) "a spooky ghost.")
-          ((and (= mon 11) (= day 11)) "a World War I soldier.")
-          ((and (= mon 12) (= day 25)) "the ghost of Christmas Past.")
-          (t
-           (elt (personalities) (mod (+ (absolute-day) *personality-offset*) (length (personalities))))))))
-
-(defun call-without-personality (thunk)
-  (let ((*enable-personality* nil))
-    (funcall thunk)))
-
-(defmacro without-personality (&body body)
-  `(CALL-WITHOUT-PERSONALITY (LAMBDA () ,@body)))
-
 (defun read-system-instruction (filename &rest format-args)
   (plist-hash-table
    `(:text ,(apply #'format nil
