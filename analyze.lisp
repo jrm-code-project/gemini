@@ -176,7 +176,7 @@
       (error "No top-level forms found in file '~a'." filename))
     (unwind-protect
          (prog1 (let iter ((current-form (car forms))
-                           (analysis (invoke-gemini
+                           (analysis (continue-gemini
                                       (list (part +analyze-file-form-prompt+)
                                             (part (car forms)))))
                            (results '())

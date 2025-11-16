@@ -448,3 +448,60 @@
     ;; (print (call-tool server (find-tool server "startElicitation") +json-empty-object+))
     ;; (finish-output)
     ))
+
+
+(defun convert-property (prop)
+  (cons (if (keywordp (car prop))
+            (car prop)
+            (keystring->keyword (car prop)))
+        (encode-schema-type (cdr prop))))
+
+(defun convert-input-schema (input-schema)
+  (object :type (get-type input-schema)
+          :properties (alist-hash-table (map 'list #'convert-property (hash-table-alist (get-properties input-schema))))
+          :required (or (get-required input-schema)
+                        #())))
+                              
+(defun transform-description (input-string)
+  "Transforms the description string by looking for _ characters, uppercasing the next character, and removing the _."
+  (with-output-to-string (output-string)
+    (with-input-from-string (str input-string)
+      (loop for char = (read-char str nil)
+            while char
+            do (if (char= char #\_)
+                   (let ((next-char (read-char str nil)))
+                     (when next-char
+                       (write-char (char-upcase next-char) output-string)))
+                   (write-char char output-string))))))
+
+(defun convert-tool (mcp-server tool)
+  "Converts an MCP tool to a function specification."
+  (let ((input-schema (convert-input-schema (get-input-schema tool)))
+        (output-schema (get-output-schema tool)))
+
+    (let ((fd (function-declaration
+               :name (format nil "~a" (get-name tool))
+               :description (transform-description (get-description tool))
+               :behavior :blocking
+               :parameters (encode-schema-type input-schema)
+               :response (encode-schema-type output-schema))))
+      ;; (format *trace-output* "~&;; Converted MCP tool: ~a~%" (dehashify fd))
+      ;; (finish-output *trace-output*)
+      (cons fd
+            (lambda (&rest args &key &allow-other-keys)
+              ;; (format *trace-output* "~&;; Calling MCP tool: ~a with args: ~a~%" (get-name tool) args)
+              ;; (format *trace-output* "~&;; required: ~a~%" (get-required input-schema))
+              ;; (finish-output *trace-output*)
+              (call-tool mcp-server tool (plist-hash-table args)))))))
+
+(defun get-mcp-functions-and-handlers (mcp-server)
+  "Returns the functions and handlers for the given MCP server."
+  (when (and (mcp-server-alive? mcp-server)
+             (tools-capability mcp-server))
+    (map 'list (lambda (tool) (convert-tool mcp-server tool)) (get-tools mcp-server))))
+
+(defun mcp-functions-and-handlers (content-generator)
+  "Extracts the list of functions supplied by the MCP servers."
+  (fold-left (binary-compose-right #'append #'get-mcp-functions-and-handlers) nil
+             (cons (get-memory-mcp-server content-generator)
+                   (remove (find-mcp-server "memory") *mcp-servers*))))

@@ -495,6 +495,16 @@
    (cached-content       :initarg :cached-content       :initform nil :accessor get-cached-content)
    (diary-directory      :initarg :diary-directory      :initform (make-pathname :directory (list :relative "Diary"))
                          :accessor get-diary-directory)
+   (enable-evolution-tools :initarg :enable-evolution-tools :initform nil :accessor get-enable-evolution-tools)
+   (enable-eval          :initarg :enable-eval          :initform nil :accessor get-enable-eval)
+   (enable-filesystem-tools :initarg :enable-filesystem-tools :initform nil :accessor get-enable-filesystem-tools)
+   (enable-git-tools     :initarg :enable-git-tools     :initform nil :accessor get-enable-git-tools)
+   (enable-gnutils       :initarg :enable-gnutils       :initform nil :accessor get-enable-gnutils)
+   (enable-interaction-tools :initarg :enable-interaction-tools :initform nil :accessor get-enable-interaction-tools)
+   (enable-lisp-introspection-tools :initarg :enable-lisp-introspection-tools :initform nil :accessor get-enable-lisp-introspection-tools)
+   (enable-misc-tools    :initarg :enable-misc-tools    :initform nil :accessor get-enable-misc-tools)
+   (enable-shell-tools   :initarg :enable-shell-tools   :initform nil :accessor get-enable-shell-tools)
+   (enable-web-tools     :initarg :enable-web-tools     :initform nil :accessor get-enable-web-tools)
    (generation-config    :initarg :generation-config :accessor %get-generation-config)
    (include-bash-history :initarg :include-bash-history :initform nil :accessor get-include-bash-history)
    (include-timestamp    :initarg :include-timestamp    :initform nil :accessor get-include-timestamp)
@@ -506,12 +516,12 @@
                                 :initform (make-pathname :name "system-instruction" :type "md")
                                 :accessor get-system-instruction-filepath)
    (system-instructions-filepath :initarg :system-instructions-filepath
-                                :initform (make-pathname :name "system-instructions" :type "md")
-                                :accessor get-system-instructions-filepath)
+                                 :initform (make-pathname :name "system-instructions" :type "md")
+                                 :accessor get-system-instructions-filepath)
    (safety-settings      :initarg :safety-settings      :initform nil :accessor get-safety-settings)
    (temperature          :initarg :temperature          :accessor get-temperature)
    (tool-config          :initarg :tool-config          :initform nil :accessor get-tool-config))
-   
+
   (:documentation "Class representing persona configuration."))
 
 (defmethod get-generation-config ((object persona-config))
@@ -530,16 +540,14 @@
           generation-config))))
 
 (defmethod get-system-instruction ((object persona-config))
-  (let ((filepath (or (and (slot-boundp object 'system-instruction-filepath)
-                           (slot-value object 'system-instruction-filepath))
-                      (get-system-instruction-filepath object))))
+  (let ((filepath (persona-system-instruction-filepath object)))
     (and (probe-file filepath)
-         (uiop:read-file-string filepath))))
+         (list (uiop:read-file-string filepath)))))
 
 (defmethod get-system-instructions ((object persona-config))
-  (let ((filepath (or (and (slot-boundp object 'system-instructions-filepath)
-                           (slot-value object 'system-instructions-filepath))
-                      (get-system-instructions-filepath object))))
+  (let ((filepath (persona-system-instructions-filepath object)))
+    ;; (format *trace-output* "Fetching system instruction from file ~s for persona ~A.~%" filepath (get-name object))
+    ;; (finish-output *trace-output*)
     (and (probe-file filepath)
          (file->paragraphs filepath))))
 
@@ -581,6 +589,8 @@
   (get-safety-settings (get-config object)))
 
 (defmethod get-system-instruction ((object content-generator))
+  ;; (format *trace-output* "Fetching system instruction for content generator.~%")
+  ;; (finish-output *trace-output*)
   (or (get-system-instruction (get-config object))
       (get-system-instructions (get-config object))))
 

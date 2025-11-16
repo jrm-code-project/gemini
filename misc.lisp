@@ -2,26 +2,57 @@
 
 (in-package "GEMINI")
 
-(defun seconds-per-minute () 60)
-(defun minutes-per-hour () 60)
-(defun hours-per-day () 24)
-(defun minutes-per-day () (* (minutes-per-hour) (hours-per-day)))
+(defun seconds-per-minute ()
+  "Returns the number of seconds in a minute."
+  (declare (inline seconds-per-minute))
+  60)
+(defun minutes-per-hour ()
+  "Returns the number of minutes in an hour."
+  (declare (inline minutes-per-hour))
+ 60)
+(defun hours-per-day ()
+  "Returns the number of hours in a day."
+  (declare (inline hours-per-day))
+  24)
+(defun minutes-per-day ()
+  "Returns the number of minutes in a day."
+  (declare (inline minutes-per-day))
+  (* (minutes-per-hour) (hours-per-day)))
 (defun seconds-per-day ()
+  "Returns the number of seconds in a day."
+  (declare (inline seconds-per-day))
   (* (seconds-per-minute) (minutes-per-day)))
 (defun absolute-day ()
   "Return the day since the start of the epoch (UTC)."
+  (declare (inline absolute-day))
   (floor (get-universal-time) (seconds-per-day)))
 
 ;; Coerce to T or NIL
 (defun ->boolean (thing)
+  "Returns NIL if THING is NIL, T otherwise."
+  (declare (inline ->boolean))
   (if thing
       t
       nil))
 
+(defun up-to-sharp (string)
+  "Returns the substring of STRING up to (but not including) the first '#' character."
+  (let ((sharp-pos (position #\# string)))
+    (if sharp-pos
+        (subseq string 0 sharp-pos)
+        string)))
+
+(defun non-blank-string-p (string)
+  "Returns T if STRING is a non-blank string, NIL otherwise."
+  (and (stringp string)
+       (not (string= "" (str:trim string)))))
+
 (defun string->word-list (string)
+  "Splits STRING into a list of words, whitespace is not preserved."
   (str:split #\Space (str:trim string) :omit-nulls t))
 
 (defun strings->word-list (strings)
+  "Splits a list of strings into a flat list of words."
   (mappend #'string->word-list strings))
 
 (defun deflow (string)
@@ -88,12 +119,19 @@
           (find-package "KEYWORD")))
 
 (defun ->keyword (thing)
+  "Converts THING to a keyword.
+   If THING is already a keyword, it is returned as is.
+   If THING is a string, it is converted to a keyword.
+   If THING is a symbol, its name is converted to a keyword."
   (etypecase thing
     (keyword thing)
     (string (keystring->keyword thing))
     (symbol (->keyword (symbol-name thing)))))
 
 (defun ->keystring (thing)
+  "Converts THING to a camelCase string.
+   If THING is a keyword, it is converted to a camelCase string.
+   If THING is already a string, it is returned as is."
   (etypecase thing
     (keyword (keyword->keystring thing))
     (string thing)))
@@ -222,6 +260,7 @@ Does not add values to ALISTS."
               (cdr (assoc keyword object :key #'->keyword)))))))
 
 (defun function-minimum-arity (func)
+  "Returns the minimum number of required arguments for the given function FUNC."
   (collect-length
    (until-if
     (lambda (symbol)
@@ -242,9 +281,11 @@ Does not add values to ALISTS."
                raw-return-type)))))
 
 (defun returns-string? (func)
+  "Returns T if the function FUNC is declared to return a string."
   (eq (function-return-type func) 'string))
 
 (defun returns-boolean? (func)
+  "Returns T if the function FUNC is declared to return a boolean."
   (eq (function-return-type func) 'boolean))
 
 (defun prompting-read (prompt &optional (default nil))
@@ -377,6 +418,8 @@ Does not add values to ALISTS."
         #'string< :key #'symbol-name))
 
 (defun read-file-bytes (pathname)
+  "Reads the contents of the file at PATHNAME and returns it as an array of unsigned-byte 8.
+   Returns NIL if the file does not exist."
   (with-open-file (stream pathname :direction :input :element-type '(unsigned-byte 8) :if-does-not-exist nil)
     (when stream
       (let* ((size (file-length stream))
@@ -385,9 +428,41 @@ Does not add values to ALISTS."
         bytes))))
 
 (defun write-file-bytes (pathname bytes)
+  "Writes the BYTES (an array of unsigned-byte 8) to the file at PATHNAME.
+   If the file already exists, it will be overwritten."
   (with-open-file (stream pathname :direction :output :element-type '(unsigned-byte 8) :if-does-not-exist :create :if-exists :supersede)
     (write-sequence bytes stream)
     (finish-output stream)))
+
+(defun read-full-forms (string)
+  "Reads all Lisp forms from STRING and returns them as a list."
+  (let ((eof-value (cons nil nil)))
+    (let iter ((forms '())
+               (pos 0))
+      (cond ((= pos (length string))
+             (if (null (cdr forms))
+                 (car forms)
+                 (cons 'progn (reverse forms))))
+            ((or (char= (char string pos) #\Space)
+                 (char= (char string pos) #\Return)
+                 (char= (char string pos) #\Newline)
+                 (char= (char string pos) #\Tab))
+             (iter forms (1+ pos)))
+            (t (multiple-value-bind (form limit)
+                   (read-from-string string nil eof-value :start pos)
+                 (cond ((equal form eof-value)
+                        (error "Could not read a full form from the string starting at position ~d: ~a" pos string))
+                       (t (iter (cons form forms) limit)))))))))
+
+(defun handle-tilde (namestring)
+  "Handles tilde (~) in NAMESRING, expanding it to the user's home directory."
+  (cond ((string= namestring "~")
+         (namestring (user-homedir-pathname)))
+        ((str:starts-with? "~/" namestring)
+         (concatenate 'string
+                      (namestring (user-homedir-pathname))
+                      (subseq namestring 2)))
+        (t namestring)))
 
 (defun ensure-directory-pathname (pathname)
   "Ensures that the given PATHNAME ends with a directory separator.
@@ -430,27 +505,36 @@ Does not add values to ALISTS."
             (error "Invalid suffix format: ~s" suffix)))))
 
 (defun backup-pathname (pathname &optional (suffix "~"))
+  "Generates a backup pathname for the given PATHNAME.
+   If a file with the generated backup pathname already exists,
+   it appends a numeric suffix to create a unique backup filename."
   (let ((backup (pathname (concatenate 'string (namestring pathname) suffix))))
     (if (probe-file backup)
         (backup-pathname pathname (next-suffix suffix))
         backup)))
 
 (defun backup-file (pathname)
+  "Creates a backup of the file at PATHNAME by renaming it to a backup pathname.
+   The backup pathname is generated to avoid overwriting existing backups."
   (when (probe-file pathname)
     (rename-file pathname (backup-pathname pathname))))
 
 (defun ends-of-lines (filename)
+  "Returns a list of file positions marking the end of each line in FILENAME,
+   along with the position of the end of the file."
   (with-open-file (stream filename :direction :input)
     (do ((indexes (list 0) (cons (file-position stream) indexes)))
         ((eql (read-line stream nil :eof) :eof)
          (values (reverse indexes) (file-position stream))))))
 
 (defun ends-of-forms (filename)
+  "Returns a list of file positions marking the end of each Lisp form in FILENAME."
   (with-open-file (stream filename :direction :input)
     (do ((indexes (list 0) (cons (file-position stream) indexes)))
         ((eql (read stream nil :eof) :eof) (reverse indexes)))))
 
 (defun file-forms (filename)
+  "Returns a list of strings, each string being a Lisp form read from FILENAME."
   (multiple-value-bind (ends-of-lines end-of-file) (ends-of-lines filename)
     (let ((ends-of-forms (ends-of-forms filename))
           (text (uiop:read-file-string filename)))
@@ -468,6 +552,7 @@ Does not add values to ALISTS."
   "Simple helper to guess MIME type based on file extension."
   (let ((extension (pathname-type path)))
     (cond 
+      ((string-equal extension "asd")  "text/plain")
       ((string-equal extension "csv")  "text/csv")
       ((string-equal extension "gif")  "image/gif")
       ((string-equal extension "html") "text/html")
@@ -484,6 +569,8 @@ Does not add values to ALISTS."
       (t "application/octet-stream"))))
 
 (defun file->blob (path)
+  "Returns the contents of the file at PATH as a base64-encoded string.
+   Returns NIL if the file cannot be read."
   (handler-case
       (let ((bytes (read-file-bytes path)))
         (and bytes (cl-base64:usb8-array-to-base64-string bytes)))
@@ -495,6 +582,8 @@ Does not add values to ALISTS."
       nil)))
 
 (defun blob->file (path bytes)
+  "Writes the base64-encoded BYTES string to the file at PATH.
+   Returns NIL if the file cannot be written."
   (handler-case
       (write-file-bytes path (cl-base64:base64-string-to-usb8-array bytes))
     (file-error (e)
@@ -505,6 +594,9 @@ Does not add values to ALISTS."
       nil)))
 
 (defun text-stream->paragraphs (stream)
+  "Reads text from STREAM and splits it into paragraphs.
+   Lines starting with '<!--' are treated as comments and ignored.
+   Paragraphs are separated by blank lines."
   (let iter ((line (read-line stream nil :eof))
              (current-paragraph '())
              (paragraphs '()))
@@ -525,13 +617,17 @@ Does not add values to ALISTS."
                    paragraphs)))))
 
 (defun format-paragraphs (stream paragraphs)
+  "Writes PARAGRAPHS to STREAM, separating them with blank lines."
   (format stream "~{~a~%~%~}" paragraphs))
 
 (defun file->paragraphs (path)
+  "Reads the file at PATH and splits its contents into paragraphs."
   (with-open-file (stream path :direction :input)
     (text-stream->paragraphs stream)))
 
 (defun paragraphs->file (path format-preamble paragraphs)
+  "Writes PARAGRAPHS to the file at PATH, preceded by the output of FORMAT-PREAMBLE.
+   FORMAT-PREAMBLE is a function that takes a stream and writes the preamble to it."
   (with-open-file (stream path :direction :output :if-does-not-exist :create :if-exists :supersede)
     (funcall format-preamble stream)
     (terpri stream)
@@ -539,6 +635,7 @@ Does not add values to ALISTS."
     (finish-output stream)))
 
 (defun strip-fence (string)
+  "Strips code fences (``` or ~~~) from the start and end of STRING, if present."
   (let* ((lines (str:split #\newline string :omit-nulls t))
          (first-line (first lines))
          (last-line (car (last lines))))

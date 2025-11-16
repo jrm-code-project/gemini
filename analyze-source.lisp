@@ -30,7 +30,7 @@
 (defparameter
  *analyze-system-instructions*
  (concatenate 'string
-              "You are an expert Common Lisp developer with many years experience."
+h              "You are an expert Common Lisp developer with many years experience."
               "  You will be given a file from a Common Lisp system based on"
               " the following system definition."))
 

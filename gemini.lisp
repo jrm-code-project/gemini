@@ -1,4 +1,4 @@
-;;; -*- Lisp -*-
+;;; -*- mode: Lisp; coding: utf-8 -*-
 
 (in-package "GEMINI")
 
@@ -166,12 +166,6 @@
       *generation-config*
       (generation-config)))
 
-(defun default-process-part (part)
-  "Processes a single part object. If it's a text object, it extracts
-   and returns the text. Otherwise, it returns the part as is."
-  (cond ((text-part? part) (get-text part))
-        (t nil)))
-
 (defun process-thought (thought)
   "Processes a thought part object.
    If the thought is a text part, it formats the text and outputs it to *trace-output*."
@@ -181,11 +175,6 @@
                 (if (and rev (string= "" (car rev)))
                     (cdr rev)
                     rev)))))
-
-(defun process-thoughts (thoughts)
-  "Processes a list of thought part objects.
-   Each thought is processed by the `process-thought` function."
-  (map nil #'process-thought thoughts))
 
 (defun default-process-arg-value (arg schema)
   "Processes a single argument value based on the provided schema.
@@ -365,76 +354,6 @@
 (defparameter +max-prompt-tokens+ (expt 2 18)
   "The maximum number of tokens allowed in the prompt context before compression is needed.")
 
-(defun compress-context (context &optional (model *model*))
-  "Compresses the context by summarizing its middle parts."
-  (let* ((prompt (car context))
-         (header (car (last context)))
-         (history-to-summarize (butlast (cdr context))))
-
-    (when history-to-summarize
-      (assert (string= (get-role prompt) "user"))
-      (assert (string= (get-role header) "model"))
-
-      (format *trace-output* "~&;; Compressing ~d messages.~%" (length history-to-summarize))
-
-      (let ((summarization-payload
-              (object
-               :contents (reverse history-to-summarize)
-               :system-instruction (content
-                                    :parts (list (part "You are a world class summarizer. Your summaries are concise, but thorough, preserving important details and key points. You use bullet points where appropriate."))
-                                    :role "system")
-               :generation-config (object :max-output-tokens (- +max-prompt-tokens+ 2048)))))
-        (let retry ((temp 0.0))
-          (setf (get-temperature (get-generation-config summarization-payload)) temp)
-          (let* ((summary-results (%%invoke-gemini model summarization-payload))
-                 (error (get-error summary-results)))
-            (if error
-                (if (< temp 2.0)
-                    (progn
-                      (warn "Summarization failed at temp ~a. Retrying. Error: ~a" temp (get-message error))
-                      (retry (+ temp 0.25)))
-                    (error "Failed to compress context even at max temperature."))
-                (let* ((candidates (get-candidates summary-results))
-                       (first-candidate (when (and candidates (consp (coerce candidates 'list)) (car (coerce candidates 'list)))))
-                       (compressed-content (when first-candidate (get-content first-candidate))))
-                  (if compressed-content
-                      (progn
-                        (format *trace-output* "~&;; Context successfully compressed.~%")
-                        (setf (get-role compressed-content) "model")
-                        (list prompt compressed-content header))
-                      (progn (warn "Summarization produced no content.")
-                             (retry (+ temp 0.25))))))))))))
-
-(defun extend-conversation (new-content)
-  (push new-content *context*)
-  (setq *prior-context* *context*)
-  (save-transcript *context*)
-  new-content)
-
-(defun extend-conversation-with-first-candidate (results)
-  "Extends the conversation context with the first candidate from the results.
-   Returns the results unchanged."
-  (let ((candidates (get-candidates results)))
-    (when candidates
-      (let ((first-candidate (if (consp candidates)
-                                 (car candidates)
-                                 (and (vectorp candidates)
-                                      (> (length candidates) 0)
-                                      (svref candidates 0)))))
-        (when first-candidate
-          (let ((content (get-content first-candidate)))
-            (when content
-              (extend-conversation content)))))))
-  results)
-
-(defun print-token-usage (results)
-  "Prints the token usage information from the results.
-     Returns the results unchanged."
-  (let ((usage-metadata (get-usage-metadata results)))
-    (when usage-metadata
-      (process-usage-metadata usage-metadata)))
-  results)
-
 (defun strip-thoughts-from-part (part)
   (if (thought-part? part)
       (progn (process-thought part)
@@ -512,105 +431,6 @@
                 (= (length candidates) 1))
            (extract-function-calls-from-candidate (svref candidates 0))))))
 
-(defun candidate-as-text-string (candidate)
-  (let ((content (get-content candidate)))
-    (and content
-         (let ((parts (coerce (get-parts content) 'list)))
-           (apply #'concatenate 'string (map 'list #'get-text (remove-if-not #'text-part? parts)))))))
-
-(defun as-singleton-text-string (results)
-  (let ((candidates (get-candidates results)))
-    (cond ((and (consp candidates)
-                (null (cdr candidates)))
-           (candidate-as-text-string (car candidates)))
-          ((and (vectorp candidates)
-                (= (length candidates) 1))
-           (candidate-as-text-string (svref candidates 0))))))
-
-(defun function-caller (prompt recur)
-  (lambda (results)
-    (let ((function-calls (extract-function-calls-from-results results)))
-      (assert (or (null function-calls) (list-of-parts? function-calls)) () "Expected function-calls to be a list of parts.")
-      (values
-       (if function-calls
-           (let ((function-results (map 'list (compose (default-process-function-call content-generator)
-                                                       #'get-function-call)
-                                        function-calls)))
-             (assert (list-of-parts? function-results) () "Expected function-results to be a list of parts.")
-             (funcall recur (append prompt (list
-                                            (content :parts function-calls
-                                                     :role "model")
-                                            (content :parts function-results
-                                                     :role "function")))))
-           (or (and *return-text-string* (as-singleton-text-string results))
-               results))
-       (let* ((candidates (get-candidates results))
-              (first-candidate (cond ((consp candidates) (car candidates))
-                                     ((and (vectorp candidates)
-                                           (> (length candidates) 0))
-                                      (svref candidates 0))
-                                     (t (error "No first candidate found."))))
-              (content (get-content first-candidate)))
-         (append prompt (list content)))))))
-
-(defun tail-call-functions (results)
-  (let ((function-calls (extract-function-calls-from-results results)))
-    (assert (or (null function-calls) (list-of-parts? function-calls)) () "Expected function-calls to be a list of parts.")
-    (if function-calls
-        (let ((function-results (map 'list (compose (default-process-function-call content-generator)
-                                                    #'get-function-call)
-                                     function-calls)))
-          (assert (list-of-parts? function-results) () "Expected function-results to be a list of parts.")
-          (invoke-gemini
-           (list (content :parts function-results
-                          :role "function"))))
-        (or (and *return-text-string* (as-singleton-text-string results))
-            results))))
-
-(defun error-check (results)
-  (if (get-error results)
-      (error "Error from Gemini (code ~d): ~a"
-             (get-code (get-error results))
-             (get-message (get-error results)))
-      results))
-
-(defun debug-response (response)
-  (format *trace-output* "~&;; Full response: ~s~%" (dehashify response))
-  response)
-
-(defparameter *output-processor* (compose #'tail-call-functions
-                                          #'print-text
-                                          #'strip-and-print-thoughts
-                                          #'print-token-usage
-                                          #'extend-conversation-with-first-candidate)
-  "The default output processor for the Gemini API.")
-
-(defun new-context (&key (conversation-id (get-universal-time)) (topic *conversation-topic*))
-  (list (content :parts (list (part (format nil "**The following is conversation #~d.**" conversation-id))
-                              (part (format nil "**The topic of conversation is ~a.**" topic)))
-                 :role "model")))
-
-(defun current-context ()
-  (if (null *context*)
-      (new-context)
-      *context*))
-
-(defun current-topic ()
-  (let* ((context (or *context* *prior-context*))
-         (first-message (car (last context)))
-         (parts (and first-message (get-parts first-message)))
-         (last-part (and parts (cadr (coerce parts 'list)))))
-    (and last-part (get-text last-part))))
-
-(defun (setf current-topic) (new-topic)
-  (let* ((context (or *context* *prior-context*))
-         (first-message (car (last context)))
-         (parts (and first-message (get-parts first-message)))
-         (last-part (and parts (cadr (coerce parts 'list)))))
-    (when last-part
-      (setf (get-text last-part)
-            (format nil "**The topic of conversation is ~a.**" new-topic)))))
-
 ;; Disable connection pooling for dexador to avoid issues with persistent connections.
 ;; In particular, the countTokens endpoint seems to be prone to hanging.  It is unclear why,
 ;; but disabling connection pooling seems to help.
@@ -625,16 +445,6 @@
    (make-pathname :name "personalities"
                   :type "txt")
    (asdf:system-source-directory "gemini")))
-
-(defun up-to-sharp (string)
-  (let ((sharp-pos (position #\# string)))
-    (if sharp-pos
-        (subseq string 0 sharp-pos)
-        string)))
-
-(defun non-blank-string-p (string)
-  (and (stringp string)
-       (not (string= "" string))))
 
 (defun personalities ()
   (collect 'list 
@@ -803,9 +613,38 @@
                                      (let ((temp (or temperature 1.0)))
                                        (- 2.0 (/ (- 2.0 temp) 2)))))))))))))))
 
+(defun initial-conversation (content-generator)
+  (let ((base (list (part (format nil "**This is conversation #~d.**" (get-universal-time))))))
+    (let ((memory-pathname (persona-memory-file (get-config content-generator))))
+      (when (probe-file memory-pathname)
+        (let ((memory-content (uiop:read-file-string memory-pathname)))
+          (when memory-content
+            (push (part "Semantic Triples:") base)
+            (push (part memory-content) base)))))
+    (let ((diary-entries
+            (map 'list #'uiop:read-file-string
+                 (persona-diary-files (get-config content-generator)))))
+      (when diary-entries
+        (push (part "Diary Entries:") base)
+        (dolist (entry diary-entries)
+          (push (part entry) base))))
+    (list (content :parts (nreverse base)
+                   :role "model"))))
+
+(defun conversation-number (conversation)
+  (let ((first-message (car conversation)))
+    (when first-message
+      (let* ((parts (get-parts first-message))
+             (first-part (and parts (car (coerce parts 'list))))
+             (text (and (text-part? first-part) (get-text first-part))))
+        (and text
+             (let* ((sharp-pos (position #\# text))
+                    (dot-pos (position #\. text :start sharp-pos)))
+               (parse-integer (subseq text (1+ sharp-pos) dot-pos))))))))
+
 (defun chatbot (content-generator)
   "A chatbot is a content generator that accumulates conversation history."
-  (let ((conversation nil))
+  (let ((conversation (initial-conversation content-generator)))
     (labels ((reprompt (prompt &key files)
                (let* ((file-parts (when files (prepare-file-parts files)))
                       (prompt-contents-base (let ((*include-timestamp* (get-include-timestamp content-generator))
@@ -817,7 +656,8 @@
                  (assert (list-of-content? prompt-contents)
                          () "Prompt must be a list of content objects.")
                  (setq conversation
-                       (funcall content-generator (append conversation prompt-contents))))))
+                       (funcall content-generator (append conversation prompt-contents)))
+                 (save-transcript conversation))))
       #'reprompt)))
 
 ;;; Persona management
@@ -825,14 +665,28 @@
 (defun personas-directory ()
   "Returns the directory where persona configurations are stored."
   (merge-pathnames
+   (make-pathname :directory '(:relative "Personas"))
+   (asdf:system-source-directory "gemini")))
+
+(defun users-personas-directory ()
+  "Returns the directory where user-specific persona configurations are stored."
+  (merge-pathnames
    (make-pathname :directory '(:relative ".personas"))
    (user-homedir-pathname)))
 
 (defun persona-directory (persona-name)
   "Returns the directory for a specific persona."
-  (merge-pathnames
-   (make-pathname :directory (list :relative persona-name))
-   (personas-directory)))
+  (let ((possibility1 (merge-pathnames
+                       (make-pathname :directory (list :relative persona-name))
+                       (users-personas-directory)))
+        (possibility2 (merge-pathnames
+                       (make-pathname :directory (list :relative persona-name))
+                       (personas-directory))))
+    (if (probe-file possibility1)
+        possibility1
+        (if (probe-file possibility2)
+            possibility2
+            possibility1))))
 
 (defun persona-config-file (persona-name)
   "Returns the configuration file path for a specific persona."
@@ -961,46 +815,53 @@
           (append (list memory-content) (->prompt prompt)))
         (->prompt prompt))))
 
-(defun reload-persona (persona-name prompt)
-  "Reloads a persona from disk and returns a chatbot function configured for that persona."
-  (let* ((config (load-persona-config persona-name))
-         (content-generator (load-content-generator config))
-         (persona (chatbot content-generator))
-         (memory-file (persona-memory-file config))
-         (files (if (and (probe-file memory-file)
-                         (not (get-narrative-memory config)))
-                    (cons memory-file
-                          (persona-diary-files config))
-                    (persona-diary-files config))))
-      (if files
-          (funcall persona (if (and (probe-file memory-file)
-                                    (get-narrative-memory config))
-                               (merge-narrative-memory-into-prompt prompt memory-file)
-                               prompt)
-                   :files files)
-          (funcall persona (if (and (probe-file memory-file)
-                                    (get-narrative-memory config))
-                               (merge-narrative-memory-into-prompt prompt memory-file)
-                               prompt)))
-      persona))
+(defun persona-name->content-generator (persona-name)
+  (load-content-generator (load-persona-config persona-name)))
 
-(defvar *default-persona*)
+(defvar *default-content-generator*)
 (defvar *gemini-pro*)
 (defvar *gemini-flash*)
 
+(eval-when (:compile :load-toplevel :execute)
+  (setf (documentation '*default-content-generator* 'variable) "The default content generator instance.")
+  (setf (documentation '*gemini-flash* 'variable) "The content generator for Gemini flash.")
+  (setf (documentation '*gemini-pro* 'variable) "The content generator for Gemini Pro."))
+
 (eval-when (:load-toplevel :execute)
-  (unless (boundp '*default-persona*)
-    (setf *default-persona* (reload-persona "Default" "Hello!")))
-  (unless (boundp '*gemini-pro*)
-    (setf *gemini-pro* (reload-persona "GeminiPro" "Hello!")))
-  (unless (boundp '*gemini-flash*)
-    (setf *gemini-flash* (reload-persona "GeminiFlash" "Hello!"))))
+  (setq *default-content-generator* (persona-name->content-generator "Default"))
+  (setq *gemini-flash* (persona-name->content-generator "GeminiFlash"))
+  (setq *gemini-pro* (persona-name->content-generator "GeminiPro")))
 
-(defun gemini-flash (prompt &key files)
-  (funcall *gemini-flash* prompt :files files))
+(defun invoke-gemini (prompt &key files system-instruction)
+  "Invokes the default Gemini persona with the given PROMPT, FILES, and optional SYSTEM-INSTRUCTION."
+  (generate-content *default-content-generator* prompt files system-instruction))
 
-(defun gemini-pro (prompt &key files)
-  (funcall *gemini-pro* prompt :files files))
+(defun gemini-flash (prompt &key files system-instruction)
+  (generate-content *gemini-flash* prompt files system-instruction))
+
+(defun gemini-pro (prompt &key files system-instruction)
+  (generate-content *gemini-pro* prompt files system-instruction))
+
+(defun persona-name->chatbot (persona-name)
+  "Reloads a persona from disk and returns a chatbot function configured for that persona."
+  (chatbot (persona-name->content-generator persona-name)))
+
+(defvar *default-persona-chatbot*)
+(defvar *gemini-flash-chatbot*)
+(defvar *gemini-pro-chatbot*)
+
+(eval-when (:compile :load-toplevel :execute)
+  (setf (documentation '*default-persona-chatbot* 'variable) "The default persona chatbot function.")
+  (setf (documentation '*gemini-flash-chatbot* 'variable) "The Gemini Flash chatbot function.")
+  (setf (documentation '*gemini-pro-chatbot* 'variable) "The Gemini Pro chatbot function."))
+
+(eval-when (:load-toplevel :execute)
+  (unless (boundp '*default-persona-chatbot*)
+    (setf *default-persona-chatbot* (chatbot *default-content-generator*)))
+  (unless (boundp '*gemini-flash-chatbot*)
+    (setf *gemini-flash-chatbot* (chatbot *gemini-flash*)))
+  (unless (boundp '*gemini-pro-chatbot*)
+    (setf *gemini-pro-chatbot* (chatbot *gemini-pro*))))
 
 ;;; Simple one persona chat interface.
 
@@ -1015,6 +876,21 @@
 (defun chat (prompt)
   "Sends a PROMPT to the current chat persona and returns the response."
   (funcall *chat-persona* prompt)
+  nil)
+
+(defun continue-gemini (prompt)
+  "Sends a PROMPT to the default Gemini persona chatbot and returns the response."
+  (funcall *default-persona-chatbot* prompt)
+  nil)
+
+(defun gemini-flash-chat (prompt)
+  "Sends a PROMPT to the Gemini Pro chatbot and returns the response."
+  (funcall *gemini-flash-chatbot* prompt)
+  nil)
+
+(defun gemini-pro-chat (prompt)
+  "Sends a PROMPT to the Gemini Pro chatbot and returns the response."
+  (funcall *gemini-pro-chatbot* prompt)
   nil)
 
 ;;; Debate framework

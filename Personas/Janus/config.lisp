@@ -1,0 +1,3 @@
+;;; -*- Lisp -*-
+
+:narrative-memory t

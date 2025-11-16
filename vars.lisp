@@ -16,37 +16,45 @@
 
 (defun save-transcript (context)
   (ensure-directories-exist (transcript-directory))
-  (let* ((initial-text (get-text (car (coerce (get-parts (car (coerce (last context) 'list))) 'list))))
+  (let* ((initial-text (get-text (car (coerce (get-parts (car context)) 'list))))
          (sharp-pos (position #\# initial-text))
          (dot-pos (position #\. initial-text :start sharp-pos))
          (conversation-number (subseq initial-text (1+ sharp-pos) dot-pos))
          (turn-number (length context))
          (new-filename (format nil "~a-~d" conversation-number turn-number))
          (new-pathname (merge-pathnames
-                          (make-pathname
-                           :name new-filename
-                           :type "txt")
-                          (transcript-directory)))
-         (old-filename (format nil "~a-~d" conversation-number (1- turn-number)))
-         (old-pathname  (merge-pathnames
-                          (make-pathname
-                           :name old-filename
-                           :type "txt")
-                          (transcript-directory))))
+                        (make-pathname
+                         :name new-filename
+                         :type "txt")
+                        (transcript-directory)))
+         (old-filename-1 (format nil "~a-~d" conversation-number (1- turn-number)))
+         (old-pathname-1  (merge-pathnames
+                           (make-pathname
+                            :name old-filename-1
+                            :type "txt")
+                           (transcript-directory)))
+         (old-filename-2 (format nil "~a-~d" conversation-number (- turn-number 2)))
+         (old-pathname-2  (merge-pathnames
+                           (make-pathname
+                            :name old-filename-2
+                            :type "txt")
+                           (transcript-directory))))
     (with-open-file (out new-pathname
                          :direction :output
                          :if-exists :supersede)
       (let ((first? t))
         (format out "[~%  ")
-        (dolist (entry (reverse context))
+        (dolist (entry context)
           (unless first?
             (format out ",~%  "))
           (setq first? nil)
           (cl-json:encode-json entry out))
         (format out "~%]~%")
         (finish-output out)))
-    (when (probe-file old-pathname)
-      (delete-file old-pathname))))
+    (when (probe-file old-pathname-1)
+      (delete-file old-pathname-1))
+    (when (probe-file old-pathname-2)
+      (delete-file old-pathname-2))))
 
 (defun load-context (&optional conversation-number)
   (let* ((saved-contexts (directory (merge-pathnames
@@ -64,7 +72,7 @@
                         :direction :input
                         :if-does-not-exist :error)
       (when in
-        (reverse (coerce (jsonx:with-decoder-jrm-semantics (cl-json:decode-json in)) 'list))))))
+        (coerce (jsonx:with-decoder-jrm-semantics (cl-json:decode-json in)) 'list)))))
 
 (defvar *cached-content*)
 (eval-when (:compile-toplevel :load-toplevel :execute)
@@ -244,39 +252,6 @@
 (eval-when (:compile-toplevel :load-toplevel :execute)
   (setf (documentation '*additional-system-instruction* 'variable)
         "Holds additional system instruction for the model to follow."))
-
-(defparameter *enable-bash* t
-  "If true, enables the Gemini model to execute subprocesses in a bash shell.")
-
-(defparameter *enable-eval* t
-  "If true, enables the Gemini model to evaluate Lisp expressions.  This is a powerful feature that should be used with caution.  Set to t to ask before evaluation, to :yolo to allow the model to evaluate any expression.  If nil, evaluation is disabled.")
-
-(defparameter *enable-evolution* nil
-  "If true, enables the Gemini model to evolve its own code and behavior over time.")
-
-(defparameter *enable-file-system* t
-  "If true, enables the Gemini model to read and write files on the local filesystem.")
-
-(defparameter *enable-interaction* t
-  "If true, enables the Gemini model to interact with the user via read and yes-or-no prompts.")
-
-(defparameter *enable-lisp-introspection* t
-  "If true, enables the Gemini model to introspect the Lisp environment, including functions, variables, and packages.")
-
-(defparameter *enable-gnutils* t
-  "If true, enables the Gemini model to use GNU utilities via subprocess calls.")
-
-(defparameter *enable-web-functions* t
-  "If true, enables the Gemini model to call web functions such as HTTP GET and POST.")
-
-(defparameter *enable-web-search* t
-  "If true, enables the Gemini model to perform web searches.")
-
-(defvar *enable-recursive-prompt* nil
-  "If true, enables recursive prompting of the LLM.")
-
-(defparameter *enable-personality* t
-  "If non-NIL, the model will answer in the style of a randomly chosen personality.")
 
 (defparameter *mcp-servers* nil)
 
@@ -572,3 +547,5 @@
 (defparameter *return-text-string* t
   "If non-NIL, return the text string of the candidate instead of the candidate object.")
 
+(defparameter *enable-personality* t
+  "If non-NIL, the model will answer in the style of a randomly chosen personality.")
