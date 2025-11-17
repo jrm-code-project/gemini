@@ -194,7 +194,7 @@
       :parameters (schema :type :object
                           :properties (object :file
                                               (schema :type :string
-                                                      :description "The path to the file to read.")
+                                                      :description "The path to the file to write.")
                                               :lines
                                               (schema :type :array
                                                       :items (schema :type :string)

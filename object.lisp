@@ -489,7 +489,6 @@
       (setf (get-required schema) required))
     schema))
 
-
 (defclass persona-config ()
   ((name :initarg :name :accessor get-name)
    (cached-content       :initarg :cached-content       :initform nil :accessor get-cached-content)
@@ -499,7 +498,7 @@
    (enable-eval          :initarg :enable-eval          :initform nil :accessor get-enable-eval)
    (enable-filesystem-tools :initarg :enable-filesystem-tools :initform nil :accessor get-enable-filesystem-tools)
    (enable-git-tools     :initarg :enable-git-tools     :initform nil :accessor get-enable-git-tools)
-   (enable-gnutils       :initarg :enable-gnutils       :initform nil :accessor get-enable-gnutils)
+   (enable-gnutils       :initarg :enable-gnutils-tools :initform nil :accessor get-enable-gnutils)
    (enable-interaction-tools :initarg :enable-interaction-tools :initform nil :accessor get-enable-interaction-tools)
    (enable-lisp-introspection-tools :initarg :enable-lisp-introspection-tools :initform nil :accessor get-enable-lisp-introspection-tools)
    (enable-misc-tools    :initarg :enable-misc-tools    :initform nil :accessor get-enable-misc-tools)
@@ -573,6 +572,9 @@
 (defmethod get-cached-content ((object content-generator))
   (get-cached-content (get-config object)))
 
+(defmethod get-diary-directory ((object content-generator))
+  (get-diary-directory (get-config object)))
+
 (defmethod get-include-bash-history ((object content-generator))
   (get-include-bash-history (get-config object)))
 
@@ -584,6 +586,9 @@
 
 (defmethod get-model ((object content-generator))
   (get-model (get-config object)))
+
+(defmethod get-name ((object content-generator))
+  (get-name (get-config object)))
 
 (defmethod get-safety-settings ((object content-generator))
   (get-safety-settings (get-config object)))

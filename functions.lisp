@@ -7,6 +7,8 @@
   (let ((config (get-config content-generator)))
     (append
      (mcp-functions-and-handlers content-generator)
+     (let ((diary-tool (persona-diary-tool content-generator)))
+       (when diary-tool (list diary-tool)))
      (when (get-enable-evolution-tools config) (evolution-tools-and-handlers))
      (when (get-enable-filesystem-tools config) (filesystem-tools-and-handlers))
      (when (get-enable-git-tools config) (git-tools-and-handlers))

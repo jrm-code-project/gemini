@@ -495,7 +495,7 @@
                 (append (get-instructions server)
                         (get-server-instructions server))))
             (cons (get-memory-mcp-server content-generator)
-                  (remove (find-mcp-server "memory") *mcp-servers* :test #'eq)))))
+                  (remove (find-mcp-server "memory") *mcp-servers*)))))
 
 (defun compute-system-instruction (content-generator system-instruction)
   "Computes the system instruction content based on the content generator and optional override."
@@ -712,6 +712,10 @@
    (get-diary-directory persona-config)
    (persona-directory (get-name persona-config))))
 
+(defun persona-has-diary? (persona-config)
+  "Returns T if the persona has a diary directory, NIL otherwise."
+  (probe-file (persona-diary-directory persona-config)))
+
 (defun persona-diary-files (persona-config)
   "Returns a sorted list of diary file paths for a specific persona."
   (let ((diary-dir (persona-diary-directory persona-config)))
@@ -721,6 +725,57 @@
                         diary-dir))
             #'<
             :key (compose #'parse-integer #'pathname-name)))))
+
+(defun persona-last-diary-entry-number (persona-config)
+  "Returns the last diary entry number for a specific persona, or NIL if there is no diary."
+  (let ((diary-files (persona-diary-files persona-config)))
+    (when diary-files
+        (let* ((last-file (car (last diary-files)))
+               (last-filename (pathname-name last-file)))
+          (parse-integer last-filename)))))
+
+(defun persona-next-diary-entry-number (persona-config)
+  "Returns the next diary entry number for a specific persona, or NIL if there is no diary."
+  (let ((last-entry (persona-last-diary-entry-number persona-config)))
+    (when last-entry
+      (+ last-entry 1))))
+
+(defun persona-next-diary-entry-pathname (persona-config)
+  "Returns the next diary entry file path for a specific persona, or NIL if there is no diary."
+  (let ((next-entry-number (persona-next-diary-entry-number persona-config)))
+    (when next-entry-number
+      (merge-pathnames
+       (make-pathname :name (format nil "~d" next-entry-number) :type "txt")
+       (persona-diary-directory persona-config)))))
+
+(defun persona-diary-tool (persona-config)
+  "Returns a tool object for the diary of a specific persona, or NIL if there is no diary."
+  (when (persona-has-diary? persona-config)
+    (cons (function-declaration
+              :name "writeDiaryEntry"
+              :description "Writes a vector of strings to the diary of the persona."
+              :behavior :blocking
+              :parameters (schema
+                             :type :object
+                             :properties (object
+                                          :lines (schema :type :array
+                                                         :items (schema :type :string)
+                                                         :description "The lines to write to the diary."))
+                             :required (vector :lines)))
+          (lambda (&key lines)
+            (let ((diary-pathname (persona-next-diary-entry-pathname persona-config)))
+              (ensure-directories-exist diary-pathname)
+               (format *trace-output* "~&Directories exist: ~a~%" diary-pathname)
+              (finish-output *trace-output*)
+              (format *trace-output* "~&Writing ~d lines to file: ~a~%" (length lines) diary-pathname)
+               (finish-output *trace-output*)
+              (with-open-file (stream diary-pathname :direction :output
+                                            :if-does-not-exist :create
+                                            :if-exists :supersede
+                                            :element-type 'character
+                                            :external-format :utf-8)
+                 (dolist (line (coerce lines 'list) (finish-output stream))
+                   (write-line line stream))))))))
 
 (defun persona-system-instruction-filepath (persona-config)
   "Returns the system instruction file path for a specific persona."
@@ -818,11 +873,34 @@
 (defun persona-name->content-generator (persona-name)
   (load-content-generator (load-persona-config persona-name)))
 
+(defun reload-persona (persona-name prompt)
+  "Reloads a persona from disk and returns a chatbot function configured for that persona."
+  (let* ((config (load-persona-config persona-name))
+         (content-generator (load-content-generator config))
+         (persona (chatbot content-generator))
+         (memory-file (persona-memory-file config))
+         (files (if (and (probe-file memory-file)
+                         (not (get-narrative-memory config)))
+                    (cons memory-file
+                          (persona-diary-files config))
+                    (persona-diary-files config))))
+      (if files
+          (funcall persona (if (and (probe-file memory-file)
+                                    (get-narrative-memory config))
+                               (merge-narrative-memory-into-prompt prompt memory-file)
+                               prompt)
+                   :files files)
+          (funcall persona (if (and (probe-file memory-file)
+                                    (get-narrative-memory config))
+                               (merge-narrative-memory-into-prompt prompt memory-file)
+                               prompt)))
+    persona))
+
 (defvar *default-content-generator*)
 (defvar *gemini-pro*)
 (defvar *gemini-flash*)
 
-(eval-when (:compile :load-toplevel :execute)
+(eval-when (:compile-toplevel :load-toplevel :execute)
   (setf (documentation '*default-content-generator* 'variable) "The default content generator instance.")
   (setf (documentation '*gemini-flash* 'variable) "The content generator for Gemini flash.")
   (setf (documentation '*gemini-pro* 'variable) "The content generator for Gemini Pro."))
@@ -850,7 +928,7 @@
 (defvar *gemini-flash-chatbot*)
 (defvar *gemini-pro-chatbot*)
 
-(eval-when (:compile :load-toplevel :execute)
+(eval-when (:compile-toplevel :load-toplevel :execute)
   (setf (documentation '*default-persona-chatbot* 'variable) "The default persona chatbot function.")
   (setf (documentation '*gemini-flash-chatbot* 'variable) "The Gemini Flash chatbot function.")
   (setf (documentation '*gemini-pro-chatbot* 'variable) "The Gemini Pro chatbot function."))
