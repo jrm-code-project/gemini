@@ -317,8 +317,8 @@
 
 (defun prompt-bash-history ()
   (let ((v-bash-history (merge-pathnames
-                      (make-pathname :name ".v_aware_bash_history" :type :unspecific)
-                      (user-homedir-pathname)))
+                         (make-pathname :name ".v_aware_bash_history" :type :unspecific)
+                         (user-homedir-pathname)))
         (temp-log (merge-pathnames
                    (make-pathname :name (format nil ".bash_history_~d" (get-internal-real-time))
                                   :type :unspecific)
@@ -326,7 +326,7 @@
     (when (probe-file v-bash-history)
       (unwind-protect
            (progn (rename-file v-bash-history temp-log)
-                  (format nil "~&--- Bash History Start ---~%~a~%~&--- Bash History End ---~%" (uiop:read-file-string temp-log)))
+                  (format nil "~&--- Bash History Start ---~%~a~&--- Bash History End ---~%" (uiop:read-file-string temp-log)))
         (delete-file temp-log)))))
 
 (defun prompt-bash-history-part ()
