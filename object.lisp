@@ -24,6 +24,7 @@
   :description
   :enable-advanced-civic-answers
   :entities
+  :entity-type
   :enum
   :env
   :error
@@ -70,6 +71,7 @@
   :name
   :next-cursor
   :nullable
+  :observations
   :output-schema
   :parameters
   :parameters-json-schema
@@ -586,6 +588,9 @@
 
 (defmethod get-model ((object content-generator))
   (get-model (get-config object)))
+
+(defmethod (setf get-model) (new-value (object content-generator))
+  (setf (get-model (get-config object)) new-value))
 
 (defmethod get-name ((object content-generator))
   (get-name (get-config object)))

@@ -6,8 +6,22 @@
 ;;; Model-Context-Protocol (MCP) Server Support
 ;;;;;;;;
 
+(eval-when (:load-toplevel :execute)
+  (unless (probe-file (uiop/configuration:xdg-config-home))
+    (cerror "Create XDG configuration directory." "XDG configuration directory does not exist.")
+    (ensure-directories-exist (uiop/configuration:xdg-config-home))))
+
+(eval-when (:load-toplevel :execute)
+  (unless (probe-file (uiop/configuration:xdg-config-pathname "mcp/"))
+    (cerror "Create mcp configuration directory." "mcp configuration directory does not exist.")
+    (ensure-directories-exist (uiop/configuration:xdg-config-pathname "mcp/"))))
+
 (defun mcp-config-pathname ()
   (uiop/configuration:xdg-config-pathname "mcp/mcp.lisp"))
+
+(eval-when (:load-toplevel :execute)
+  (unless (probe-file (mcp-config-pathname))
+    (warn "mcp.lisp configuration file does not exist, no mcp servers will be started.")))
 
 (defun read-mcp-config ()
   (with-open-file (stream (mcp-config-pathname) :direction :input :if-does-not-exist nil)

@@ -505,6 +505,10 @@
                :role "system"))))
 
 (defun generate-content (content-generator prompt files system-instruction)
+  (if (and (consp prompt)
+           (eq (car prompt) :set-model!))
+      (setf (get-model content-generator) (cadr prompt))
+
   ;; Merge the files into the prompt.
   (let* ((file-parts (when files (prepare-file-parts files)))
          (prompt-contents-base (let ((*include-timestamp* (get-include-timestamp content-generator))
@@ -611,16 +615,35 @@
                            ;; fall through case - reinvoke with higher temperature
                            (reinvoke (+ count 1)
                                      (let ((temp (or temperature 1.0)))
-                                       (- 2.0 (/ (- 2.0 temp) 2)))))))))))))))
+                                       (- 2.0 (/ (- 2.0 temp) 2))))))))))))))))
 
 (defun initial-conversation (content-generator)
   (let ((base (list (part (format nil "**This is conversation #~d.**" (get-universal-time))))))
     (let ((memory-pathname (persona-memory-file (get-config content-generator))))
       (when (probe-file memory-pathname)
-        (let ((memory-content (uiop:read-file-string memory-pathname)))
-          (when memory-content
-            (push (part "Semantic Triples:") base)
-            (push (part memory-content) base)))))
+        (let ((memory-json nil))
+          ;; Extract json
+          (ignore-errors
+           (with-open-file (stream memory-pathname :direction :input)
+             (do ((json (cl-json:decode-json stream) (cl-json:decode-json stream)))
+                 ((null line) nil)
+               (push json memory-json))))
+          (push (part "Semantic Entities:") base)
+          (push (part (format nil "Entity Type, Name, Observation~%~{~{~a~^,~}~%~}~%~%"
+                              (mappend (lambda (record)
+                                         (map 'list (lambda (observation)
+                                                      (list (cdr (assoc :entity-type record))
+                                                            (cdr (assoc :name record))
+                                                            observation))
+                                              (cdr (assoc :observations record))))
+                                       (remove "entity" memory-json :test-not #'equal :key (lambda (item) (cdr (assoc :type item))))))) base)
+          (push (part "Semantic Relations:") base)
+          (push (part (format nil "From, Relation Type, To~%~{~{~a~^,~}~%~}~%~%"
+                              (mapcar (lambda (x) 
+                                        (list (cdr (assoc :from x))
+                                              (cdr (assoc :relation-type x))
+                                              (cdr (assoc :to x))))
+                                      (cdr (remove "relation" memory-json :test-not #'equal :key (lambda (item) (cdr (assoc :type item)))))))) base))))
     (let ((diary-entries
             (map 'list #'uiop:read-file-string
                  (persona-diary-files (get-config content-generator)))))
@@ -646,18 +669,21 @@
   "A chatbot is a content generator that accumulates conversation history."
   (let ((conversation (initial-conversation content-generator)))
     (labels ((reprompt (prompt &key files)
-               (let* ((file-parts (when files (prepare-file-parts files)))
-                      (prompt-contents-base (let ((*include-timestamp* (get-include-timestamp content-generator))
-                                                  (*include-bash-history* (get-include-bash-history content-generator)))
-                                              (->prompt prompt)))
-                      (prompt-contents (if file-parts
-                                           (merge-user-prompt-and-files prompt-contents-base file-parts)
-                                           prompt-contents-base)))
-                 (assert (list-of-content? prompt-contents)
-                         () "Prompt must be a list of content objects.")
-                 (setq conversation
-                       (funcall content-generator (append conversation prompt-contents)))
-                 (save-transcript conversation))))
+               (if (and (consp prompt)
+                        (eq (car prompt) :set-model!))
+                   (funcall content-generator prompt)
+                   (let* ((file-parts (when files (prepare-file-parts files)))
+                          (prompt-contents-base (let ((*include-timestamp* (get-include-timestamp content-generator))
+                                                      (*include-bash-history* (get-include-bash-history content-generator)))
+                                                  (->prompt prompt)))
+                          (prompt-contents (if file-parts
+                                               (merge-user-prompt-and-files prompt-contents-base file-parts)
+                                               prompt-contents-base)))
+                     (assert (list-of-content? prompt-contents)
+                             () "Prompt must be a list of content objects.")
+                     (setq conversation
+                           (funcall content-generator (append conversation prompt-contents)))
+                     (save-transcript conversation)))))
       #'reprompt)))
 
 ;;; Persona management

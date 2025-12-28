@@ -26,19 +26,7 @@
                         (make-pathname
                          :name new-filename
                          :type "txt")
-                        (transcript-directory)))
-         (old-filename-1 (format nil "~a-~d" conversation-number (1- turn-number)))
-         (old-pathname-1  (merge-pathnames
-                           (make-pathname
-                            :name old-filename-1
-                            :type "txt")
-                           (transcript-directory)))
-         (old-filename-2 (format nil "~a-~d" conversation-number (- turn-number 2)))
-         (old-pathname-2  (merge-pathnames
-                           (make-pathname
-                            :name old-filename-2
-                            :type "txt")
-                           (transcript-directory))))
+                        (transcript-directory))))
     (with-open-file (out new-pathname
                          :direction :output
                          :if-exists :supersede)
@@ -51,10 +39,15 @@
           (cl-json:encode-json entry out))
         (format out "~%]~%")
         (finish-output out)))
-    (when (probe-file old-pathname-1)
-      (delete-file old-pathname-1))
-    (when (probe-file old-pathname-2)
-      (delete-file old-pathname-2))))
+    (dotimes (i 6)
+      (let* ((old-filename (format nil "~a-~d" conversation-number (- turn-number (+ i 1))))
+             (old-pathname (merge-pathnames
+                            (make-pathname
+                             :name old-filename
+                             :type "txt")
+                            (transcript-directory))))
+        (when (probe-file old-pathname)
+          (delete-file old-pathname))))))
 
 (defun load-context (&optional conversation-number)
   (let* ((saved-contexts (directory (merge-pathnames
