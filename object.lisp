@@ -508,6 +508,7 @@
    (enable-web-tools     :initarg :enable-web-tools     :initform nil :accessor get-enable-web-tools)
    (generation-config    :initarg :generation-config :accessor %get-generation-config)
    (include-bash-history :initarg :include-bash-history :initform nil :accessor get-include-bash-history)
+   (include-model        :initarg :include-model :initform nil :accessor get-include-model)
    (include-timestamp    :initarg :include-timestamp    :initform nil :accessor get-include-timestamp)
    (memory-filepath      :initarg :memory-filepath      :initform (make-pathname :name "memory" :type "json")
                          :accessor get-memory-filepath)
@@ -579,6 +580,9 @@
 
 (defmethod get-include-bash-history ((object content-generator))
   (get-include-bash-history (get-config object)))
+
+(defmethod get-include-model ((object content-generator))
+  (get-include-model (get-config object)))
 
 (defmethod get-include-timestamp ((object content-generator))
   (get-include-timestamp (get-config object)))

@@ -33,15 +33,45 @@
        (google:gemini-api-key)
        payload))))
 
+(defparameter *next-invoke-gemini-time* (get-universal-time)
+  "The next time at which an invoke-gemini call is allowed.
+   Used to enforce rate limiting.")
+
+(defun gemini-rate-limit ()
+  (let iter ((sleep-time (- *next-invoke-gemini-time* (get-universal-time))))
+    (when (> sleep-time 0)
+      (report-elapsed-time (format nil "Waiting ~d seconds to respect Gemini API rate limits" sleep-time)
+        (sleep sleep-time))
+      (iter (- *next-invoke-gemini-time* (get-universal-time))))))
+
 (defun %%invoke-gemini (model-id payload)
   "Invokes the Gemini API with the specified MODEL-ID and PAYLOAD.
    Returns the response from the API as a decoded JSON object.
    This is an internal helper function."
+  (let iter ((sleep-time (- *next-invoke-gemini-time* (get-universal-time))))
+    (when (> sleep-time 0)
+      (report-elapsed-time (format nil "Waiting ~d seconds to respect Gemini API rate limits" sleep-time)
+        (sleep sleep-time))
+      (iter (- *next-invoke-gemini-time* (get-universal-time)))))
+
   (report-elapsed-time (format nil "Gemini API model `~a`" model-id)
-    (google:google-post
-     (concatenate 'string +gemini-api-base-url+ model-id ":generateContent")
-     (google:gemini-api-key)
-     payload)))
+    (multiple-value-prog1
+        (google:google-post
+         (concatenate 'string +gemini-api-base-url+ model-id ":generateContent")
+         (google:gemini-api-key)
+         payload)
+      (setq *next-invoke-gemini-time*
+            (+ (get-universal-time) 60.0))))) ;; Enforce 10 second delay between calls
+
+#||
+(defun classify-prompt (prompt)
+  (let iter ((sleep-time (- *next-invoke-gemini-time* (get-universal-time))))
+    (when (> sleep-time 0)
+      (report-elapsed-time (format nil "Waiting ~d seconds to respect Gemini API rate limits" sleep-time)
+        (sleep sleep-time))
+      (iter (- *next-invoke-gemini-time* (get-universal-time)))))
+  (%%invoke-gemini "models/gemini-flash-lite-latest" ...))
+||#
 
 (defun file->part (path &key (mime-type (guess-mime-type path)))
   "Reads a file from PATH, base64 encodes its content, and returns a content PART object
@@ -303,6 +333,9 @@
           *accumulated-prompt-tokens*
           *accumulated-response-tokens*))
 
+(defparameter *include-model* nil 
+  "If true, includes the model part in the prompt content.")
+
 (defparameter *include-timestamp* nil 
   "If true, includes a timestamp part in the prompt content.")
 
@@ -315,6 +348,35 @@
 (defparameter *include-bash-history* nil
   "If true, includes the shell log part in the prompt content.")
 
+(defun calculate-string-entropy (s)
+  "Calculate the Shannon entropy of string S in bits per character."
+  (let ((len (length s)))
+    (if (zerop len) 
+        0.0
+        (let* ((chars (coerce s 'list))
+               ;; Build the frequency map using fold-left
+               (freq-map (fold-left (lambda (acc char)
+                                      (incf (gethash char acc 0))
+                                      acc)
+                                    (make-hash-table)
+                                    chars))
+               ;; Extract just the counts
+               (counts (alexandria:hash-table-values freq-map)))
+          ;; Aggregate the entropy bits: H = -sum(p_i * log2(p_i))
+          (fold-left (lambda (total count)
+                       (let ((p (/ count len)))
+                         (- total (* p (log p 2)))))
+                     0.0
+                     counts)))))
+
+(defun redact-token (token)
+  (if (> (calculate-string-entropy token) 3.0)
+        "[REDACTED]"
+        token))
+
+(defun redact (string)
+  (str:join " " (map 'list #'redact-token (str:split #\Space string))))
+
 (defun prompt-bash-history ()
   (let ((v-bash-history (merge-pathnames
                          (make-pathname :name ".v_aware_bash_history" :type :unspecific)
@@ -326,7 +388,8 @@
     (when (probe-file v-bash-history)
       (unwind-protect
            (progn (rename-file v-bash-history temp-log)
-                  (format nil "~&--- Bash History Start ---~%~a~&--- Bash History End ---~%" (uiop:read-file-string temp-log)))
+                  (format nil "~&--- Bash History Start ---~%~a~&--- Bash History End ---~%"
+                          (redact (uiop:read-file-string temp-log))))
         (delete-file temp-log)))))
 
 (defun prompt-bash-history-part ()
@@ -334,14 +397,16 @@
     (when bash-history
       (part bash-history))))
 
-(defun ->prompt (thing)
+(defun ->prompt (thing content-generator)
   "Converts a thing into a list of content objects."
   (cond ((content? thing) (list thing))
         ((part? thing) (list (content :parts (remove nil (list (when *include-timestamp* (part (prompt-timestamp)))
+                                                               (when *include-model* (part (format nil "[Model: ~a]" (or (get-model content-generator) +default-model+))))
                                                                (when *include-bash-history* (prompt-bash-history-part))
                                                                thing))
                                       :role "user")))
         ((stringp thing) (list (content :parts (remove nil (list (when *include-timestamp* (part (prompt-timestamp)))
+                                                                 (when *include-model* (part (format nil "[Model: ~a]" (or (get-model content-generator) +default-model+))))
                                                                  (when *include-bash-history* (prompt-bash-history-part))
                                                                  (part thing)))
                                         :role "user")))
@@ -351,7 +416,7 @@
          (list (content :parts (mapcar #'part thing) :role "user")))
         (t (error "Unrecognized type for prompt: ~s" thing))))
   
-(defparameter +max-prompt-tokens+ (expt 2 18)
+(defparameter +max-prompt-tokens+ (expt 2 19)
   "The maximum number of tokens allowed in the prompt context before compression is needed.")
 
 (defun strip-thoughts-from-part (part)
@@ -437,9 +502,6 @@
 (eval-when (:load-toplevel :execute)
   (setq dexador.connection-cache:*use-connection-pool* nil))
 
-(defparameter +max-prompt-tokens-padding+ 8192
-  "Number of excess tokens that might be taken up that we cannot count.")
-
 (defun personalities-file ()
   (merge-pathnames
    (make-pathname :name "personalities"
@@ -512,8 +574,9 @@
   ;; Merge the files into the prompt.
   (let* ((file-parts (when files (prepare-file-parts files)))
          (prompt-contents-base (let ((*include-timestamp* (get-include-timestamp content-generator))
+                                     (*include-model* (get-include-model content-generator))
                                      (*include-bash-history* (get-include-bash-history content-generator)))
-                                 (->prompt prompt)))
+                                 (->prompt prompt content-generator)))
          (prompt-contents (if file-parts
                               (merge-user-prompt-and-files prompt-contents-base file-parts)
                               prompt-contents-base)))
@@ -530,17 +593,25 @@
       ;; (when tools (setf (get-tools payload) tools))
       ;; (when (and tools tool-config) (setf (get-tool-config payload) tool-config))
 
-      ;; Count the tokens.  Ideally we'd like to do something when the count exceeds the limit,
-      ;; but right now all we do is complain.
+      ;; Count the tokens.  If the count exceeds the limit, we truncate the context until it is smaller
+      ;; than half the limit.
       (handler-case
           (let iter ((total-tokens (get-total-tokens
-                                    (%count-tokens (get-model content-generator) payload))))
-            (when (> (+ total-tokens +max-prompt-tokens-padding+) +max-prompt-tokens+)
+                                    (%count-tokens (get-model content-generator) payload)))
+                     (limit +max-prompt-tokens+)
+                     (cdr-count 1))
+            (when (> total-tokens limit)
               (warn "Prompt token count (~d) exceeds ~d tokens.  Truncating context."
-                    total-tokens +max-prompt-tokens+)
-              (pop (get-contents payload))
+                    total-tokens limit)
+              (dotimes (i cdr-count)
+                (pop (cdr (get-contents payload))))
+              (do ()
+                  ((get-role (cadr (get-contents payload))))
+                (pop (cdr (get-contents payload))))
               (iter (get-total-tokens
-                     (%count-tokens (get-model content-generator) payload)))))
+                     (%count-tokens (get-model content-generator) payload))
+                    (floor +max-prompt-tokens+ 2)
+                    (* cdr-count 2))))
         (timeout-error (c)
           (declare (ignore c))
           (warn "Token counting timed out after ~d seconds." +count-tokens-timeout+)))
@@ -636,14 +707,16 @@
                                                             (cdr (assoc :name record))
                                                             observation))
                                               (cdr (assoc :observations record))))
-                                       (remove "entity" memory-json :test-not #'equal :key (lambda (item) (cdr (assoc :type item))))))) base)
+                                       (remove "entity" memory-json :test-not #'equal :key (lambda (item) (cdr (assoc :type item)))))))
+                base)
           (push (part "Semantic Relations:") base)
           (push (part (format nil "From, Relation Type, To~%~{~{~a~^,~}~%~}~%~%"
                               (mapcar (lambda (x) 
                                         (list (cdr (assoc :from x))
                                               (cdr (assoc :relation-type x))
                                               (cdr (assoc :to x))))
-                                      (cdr (remove "relation" memory-json :test-not #'equal :key (lambda (item) (cdr (assoc :type item)))))))) base))))
+                                      (cdr (remove "relation" memory-json :test-not #'equal :key (lambda (item) (cdr (assoc :type item))))))))
+                base))))
     (let ((diary-entries
             (map 'list #'uiop:read-file-string
                  (persona-diary-files (get-config content-generator)))))
@@ -674,8 +747,9 @@
                    (funcall content-generator prompt)
                    (let* ((file-parts (when files (prepare-file-parts files)))
                           (prompt-contents-base (let ((*include-timestamp* (get-include-timestamp content-generator))
+                                                      (*include-model* (get-include-model content-generator))
                                                       (*include-bash-history* (get-include-bash-history content-generator)))
-                                                  (->prompt prompt)))
+                                                  (->prompt prompt content-generator)))
                           (prompt-contents (if file-parts
                                                (merge-user-prompt-and-files prompt-contents-base file-parts)
                                                prompt-contents-base)))
