@@ -494,6 +494,8 @@
 (defclass persona-config ()
   ((name :initarg :name :accessor get-name)
    (cached-content       :initarg :cached-content       :initform nil :accessor get-cached-content)
+   (checkpoint-pathname  :initarg :checkpoint-pathname   :initform (make-pathname :name "checkpoint" :type "lisp")
+                         :accessor get-checkpoint-pathname)
    (diary-directory      :initarg :diary-directory      :initform (make-pathname :directory (list :relative "Diary"))
                          :accessor get-diary-directory)
    (enable-evolution-tools :initarg :enable-evolution-tools :initform nil :accessor get-enable-evolution-tools)
@@ -564,8 +566,8 @@
   "Initializes the content generator instance."
   (sb-mop:set-funcallable-instance-function
    instance
-   (lambda (prompt &key files system-instruction)
-     (generate-content instance prompt files system-instruction))))
+   (lambda (prompt &key context files system-instruction)
+     (generate-content instance context prompt files system-instruction))))
 
 (defmethod shared-initialize :after ((instance content-generator) slot-names &key config &allow-other-keys)
   "Initializes the content generator instance."
@@ -574,6 +576,9 @@
 
 (defmethod get-cached-content ((object content-generator))
   (get-cached-content (get-config object)))
+
+(defmethod get-checkpoint-pathname ((object content-generator))
+  (get-checkpoint-pathname (get-config object)))
 
 (defmethod get-diary-directory ((object content-generator))
   (get-diary-directory (get-config object)))

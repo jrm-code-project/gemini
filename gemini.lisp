@@ -342,7 +342,7 @@
 (defun prompt-timestamp ()
   (multiple-value-bind (sec min hour day month year day-of-week) (decode-universal-time (get-universal-time))
     (declare (ignore sec year))
-    (format nil "[~[Mon~;Tue~;Wed~;Thu~;Fri~;Sat~;Sun~], ~[~;Jan~;Feb~;Mar~;Apr~;May~;Jun~;Jul~;Aug~;Sep~;Oct~;Nov~;Dec~] ~d, ~d:~2,'0d]" 
+    (format nil "~[Mon~;Tue~;Wed~;Thu~;Fri~;Sat~;Sun~], ~[~;Jan~;Feb~;Mar~;Apr~;May~;Jun~;Jul~;Aug~;Sep~;Oct~;Nov~;Dec~] ~d, ~d:~2,'0d" 
             day-of-week month day hour min)))
 
 (defparameter *include-bash-history* nil
@@ -397,18 +397,28 @@
     (when bash-history
       (part bash-history))))
 
-(defun ->prompt (thing content-generator)
+(defun ->prompt (thing &optional (content-generator *default-content-generator*))
   "Converts a thing into a list of content objects."
   (cond ((content? thing) (list thing))
-        ((part? thing) (list (content :parts (remove nil (list (when *include-timestamp* (part (prompt-timestamp)))
-                                                               (when *include-model* (part (format nil "[Model: ~a]" (or (get-model content-generator) +default-model+))))
-                                                               (when *include-bash-history* (prompt-bash-history-part))
-                                                               thing))
+        ((part? thing) (list (content :parts
+                                      (remove nil
+                                              (list (when *include-timestamp* (part (prompt-timestamp)))
+                                                    (when *include-model* (part
+                                                                           (format nil "Model: ~a"
+                                                                                   (or (get-model content-generator)
+                                                                                       +default-model+))))
+                                                    (when *include-bash-history* (prompt-bash-history-part))
+                                                    thing))
                                       :role "user")))
-        ((stringp thing) (list (content :parts (remove nil (list (when *include-timestamp* (part (prompt-timestamp)))
-                                                                 (when *include-model* (part (format nil "[Model: ~a]" (or (get-model content-generator) +default-model+))))
-                                                                 (when *include-bash-history* (prompt-bash-history-part))
-                                                                 (part thing)))
+        ((stringp thing) (list (content :parts
+                                        (remove nil
+                                                (list (when *include-timestamp* (part (prompt-timestamp)))
+                                                      (when *include-model* (part
+                                                                             (format nil "Model: ~a"
+                                                                                     (or (get-model content-generator)
+                                                                                         +default-model+))))
+                                                      (when *include-bash-history* (prompt-bash-history-part))
+                                                      (part thing)))
                                         :role "user")))
         ((list-of-content? thing) thing)
         ((list-of-parts? thing) (list (content :parts thing :role "user")))
@@ -566,7 +576,8 @@
       (content :parts (map 'list #'part contents)
                :role "system"))))
 
-(defun generate-content (content-generator prompt files system-instruction)
+
+(defun generate-content (content-generator context prompt files system-instruction)
   (if (and (consp prompt)
            (eq (car prompt) :set-model!))
       (setf (get-model content-generator) (cadr prompt))
@@ -579,10 +590,11 @@
                                  (->prompt prompt content-generator)))
          (prompt-contents (if file-parts
                               (merge-user-prompt-and-files prompt-contents-base file-parts)
-                              prompt-contents-base)))
+                              prompt-contents-base))
+         (prompt-contents-and-context (append context prompt-contents)))
     (assert (list-of-content? prompt-contents)
             () "Prompt must be a list of content objects.")
-    (let ((payload (object :contents prompt-contents)))
+    (let ((payload (object :contents prompt-contents-and-context)))
       ;; Add other payload parts before counting tokens
       ;; Note:  Nominally, we'd want to do this, but the countTokens API rejects the payload if we do!
       
@@ -600,18 +612,17 @@
                                     (%count-tokens (get-model content-generator) payload)))
                      (limit +max-prompt-tokens+)
                      (cdr-count 1))
-            (when (> total-tokens limit)
-              (warn "Prompt token count (~d) exceeds ~d tokens.  Truncating context."
-                    total-tokens limit)
-              (dotimes (i cdr-count)
-                (pop (cdr (get-contents payload))))
-              (do ()
-                  ((get-role (cadr (get-contents payload))))
-                (pop (cdr (get-contents payload))))
-              (iter (get-total-tokens
-                     (%count-tokens (get-model content-generator) payload))
-                    (floor +max-prompt-tokens+ 2)
-                    (* cdr-count 2))))
+            (cond ((> total-tokens 1000000)
+                   (cerror "Proceed anyway" "Token count (~d) exceeds maximum allowed limit." total-tokens))
+                  ((> total-tokens 900000)
+                   (warn "Token count (~d) is extremely high; Gemini may reject the request." total-tokens))
+                  ((> total-tokens 800000)
+                   (warn "Token count (~d) is very high; consider reducing prompt size." total-tokens))
+                  ((> total-tokens 500000)
+                   (warn "Token count (~d) is high; consider reducing prompt size." total-tokens))
+                  ((> total-tokens 200000)
+                   (warn "Token count (~d) is moderately high, premium rates apply." total-tokens))
+                  (t nil)))
         (timeout-error (c)
           (declare (ignore c))
           (warn "Token counting timed out after ~d seconds." +count-tokens-timeout+)))
@@ -644,7 +655,7 @@
                                          (object :temperature temperature))))
               ;; Invoke Gemini API.  If the count is 5 or more, we switch to the "gemini-pro-latest" model
               ;; to try to get a better response.
-              (let ((response (%%invoke-gemini (if (< count 5)
+              (let ((response (%%invoke-gemini (if (< count 2)
                                                    (get-model content-generator)
                                                    "models/gemini-pro-latest")
                                                payload)))
@@ -668,20 +679,19 @@
                   (print-text response*)
                   (let ((function-calls (extract-function-calls-from-results response*)))
                     (cond (function-calls
-                           (let ((function-results (map 'list (compose (default-process-function-call content-generator)
-                                                                       #'get-function-call)
-                                                        function-calls)))
+                           (let ((function-results
+                                   (map 'list (compose (default-process-function-call content-generator)
+                                                       #'get-function-call)
+                                        function-calls)))
                              (assert (list-of-parts? function-results) ()
                                      "Expected function-results to be a list of parts.")
                              (generate-content content-generator
-                                               (append (get-contents payload)
-                                                       (list (get-content first-candidate)
-                                                             (content :parts function-results
-                                                                      :role "function")))
-                                               '()
+                                               prompt-contents-and-context
+                                               (content :parts function-results
+                                                        :role "function")
+                                               files
                                                system-instruction)))
-                          (first-candidate
-                           (append (get-contents payload) (list (get-content first-candidate))))
+                          (first-candidate (get-content first-candidate))
                           (t
                            ;; fall through case - reinvoke with higher temperature
                            (reinvoke (+ count 1)
@@ -697,25 +707,27 @@
           (ignore-errors
            (with-open-file (stream memory-pathname :direction :input)
              (do ((json (cl-json:decode-json stream) (cl-json:decode-json stream)))
-                 ((null line) nil)
+                 ((null json) nil)
                (push json memory-json))))
-          (push (part "Semantic Entities:") base)
-          (push (part (format nil "Entity Type, Name, Observation~%~{~{~a~^,~}~%~}~%~%"
+          (push (part (format nil "Semantic Entities:~%Entity Type, Name, Observation~%~{~{~a~^, ~}~%~}~%~%"
                               (mappend (lambda (record)
                                          (map 'list (lambda (observation)
                                                       (list (cdr (assoc :entity-type record))
                                                             (cdr (assoc :name record))
                                                             observation))
                                               (cdr (assoc :observations record))))
-                                       (remove "entity" memory-json :test-not #'equal :key (lambda (item) (cdr (assoc :type item)))))))
+                                       (remove "entity" memory-json
+                                               :test-not #'equal
+                                               :key (lambda (item) (cdr (assoc :type item)))))))
                 base)
-          (push (part "Semantic Relations:") base)
-          (push (part (format nil "From, Relation Type, To~%~{~{~a~^,~}~%~}~%~%"
+          (push (part (format nil "Semantic Relations:~%From, Relation Type, To~%~{~{~a~^, ~}~%~}~%~%"
                               (mapcar (lambda (x) 
                                         (list (cdr (assoc :from x))
                                               (cdr (assoc :relation-type x))
                                               (cdr (assoc :to x))))
-                                      (cdr (remove "relation" memory-json :test-not #'equal :key (lambda (item) (cdr (assoc :type item))))))))
+                                      (cdr (remove "relation" memory-json
+                                                   :test-not #'equal
+                                                   :key (lambda (item) (cdr (assoc :type item))))))))
                 base))))
     (let ((diary-entries
             (map 'list #'uiop:read-file-string
@@ -742,22 +754,43 @@
   "A chatbot is a content generator that accumulates conversation history."
   (let ((conversation (initial-conversation content-generator)))
     (labels ((reprompt (prompt &key files)
-               (if (and (consp prompt)
-                        (eq (car prompt) :set-model!))
-                   (funcall content-generator prompt)
-                   (let* ((file-parts (when files (prepare-file-parts files)))
-                          (prompt-contents-base (let ((*include-timestamp* (get-include-timestamp content-generator))
-                                                      (*include-model* (get-include-model content-generator))
-                                                      (*include-bash-history* (get-include-bash-history content-generator)))
-                                                  (->prompt prompt content-generator)))
-                          (prompt-contents (if file-parts
-                                               (merge-user-prompt-and-files prompt-contents-base file-parts)
-                                               prompt-contents-base)))
-                     (assert (list-of-content? prompt-contents)
-                             () "Prompt must be a list of content objects.")
-                     (setq conversation
-                           (funcall content-generator (append conversation prompt-contents)))
-                     (save-transcript conversation)))))
+               (cond ((eq prompt :checkpoint!)
+                      (with-open-file (stream (persona-checkpoint-file (get-config content-generator))
+                                            :direction :output
+                                            :if-does-not-exist :create
+                                            :if-exists :supersede)
+                        (let ((*print-pretty* nil)
+                              (*print-readably* t)
+                              (*print-circle* t)
+                              (*print-level* nil)
+                              (*print-length* nil))
+                          (write conversation
+                                 :stream stream
+                                 :escape t
+                                 :pretty nil
+                                 :circle t
+                                 :readably t)))
+                      'checkpointed)
+                     ((eq prompt :restore!)
+                      (with-open-file (stream (persona-checkpoint-file (get-config content-generator))
+                                            :direction :input
+                                            :if-does-not-exist :error)
+                        (let ((restored-conversation (read stream)))
+                          (assert (list-of-content? restored-conversation)
+                                  () "Restored conversation must be a list of content objects.")
+                          (setq conversation restored-conversation)
+                          'restored)))
+                     ((and (consp prompt)
+                           (eq (car prompt) :set-model!))
+                      (funcall content-generator prompt))
+                     (t
+                      (let ((llm-prediction (funcall content-generator prompt
+                                                     :context conversation
+                                                     :files files)))
+                          (setq conversation
+                                (append conversation (list (->prompt prompt content-generator)
+                                                           (list llm-prediction)))))
+                        (save-transcript conversation)))))
       #'reprompt)))
 
 ;;; Persona management
@@ -799,6 +832,12 @@
   (apply #'make-instance 'persona-config
          :name persona-name
          (file->form-list (persona-config-file persona-name))))
+
+(defun persona-checkpoint-file (persona-config)
+  "Returns the checkpoint file path for a specific persona."
+  (merge-pathnames
+   (get-checkpoint-pathname persona-config)
+   (persona-directory (get-name persona-config))))
 
 (defun persona-memory-file (persona-config)
   "Returns the memory file path for a specific persona."
@@ -977,23 +1016,8 @@
   "Reloads a persona from disk and returns a chatbot function configured for that persona."
   (let* ((config (load-persona-config persona-name))
          (content-generator (load-content-generator config))
-         (persona (chatbot content-generator))
-         (memory-file (persona-memory-file config))
-         (files (if (and (probe-file memory-file)
-                         (not (get-narrative-memory config)))
-                    (cons memory-file
-                          (persona-diary-files config))
-                    (persona-diary-files config))))
-      (if files
-          (funcall persona (if (and (probe-file memory-file)
-                                    (get-narrative-memory config))
-                               (merge-narrative-memory-into-prompt prompt memory-file)
-                               prompt)
-                   :files files)
-          (funcall persona (if (and (probe-file memory-file)
-                                    (get-narrative-memory config))
-                               (merge-narrative-memory-into-prompt prompt memory-file)
-                               prompt)))
+         (persona (chatbot content-generator)))
+    (funcall persona prompt)
     persona))
 
 (defvar *default-content-generator*)
@@ -1010,15 +1034,15 @@
   (setq *gemini-flash* (persona-name->content-generator "GeminiFlash"))
   (setq *gemini-pro* (persona-name->content-generator "GeminiPro")))
 
-(defun invoke-gemini (prompt &key files system-instruction)
+(defun invoke-gemini (prompt &key context files system-instruction)
   "Invokes the default Gemini persona with the given PROMPT, FILES, and optional SYSTEM-INSTRUCTION."
-  (generate-content *default-content-generator* prompt files system-instruction))
+  (generate-content *default-content-generator* context prompt files system-instruction))
 
-(defun gemini-flash (prompt &key files system-instruction)
-  (generate-content *gemini-flash* prompt files system-instruction))
+(defun gemini-flash (prompt &key context files system-instruction)
+  (generate-content *gemini-flash* context prompt files system-instruction))
 
-(defun gemini-pro (prompt &key files system-instruction)
-  (generate-content *gemini-pro* prompt files system-instruction))
+(defun gemini-pro (prompt &key context files system-instruction)
+  (generate-content *gemini-pro* context prompt files system-instruction))
 
 (defun persona-name->chatbot (persona-name)
   "Reloads a persona from disk and returns a chatbot function configured for that persona."
