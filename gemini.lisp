@@ -76,26 +76,39 @@
 (defun file->part (path &key (mime-type (guess-mime-type path)))
   "Reads a file from PATH, base64 encodes its content, and returns a content PART object
    suitable for the Gemini API."
-  (let ((mime-type* (if (string-equal "application/json" mime-type) ;; Gemini bug.
-                        "text/plain"
-                        mime-type)))
-    (if (str:starts-with? "text/" mime-type*)
-        (part (uiop:read-file-string path))
-        (part
-         (object
-          :data (file->blob path)
-          :mime-type mime-type*)))))
+  (when (probe-file path)
+    (ignore-errors
+     (let ((mime-type* (if (string-equal "application/json" mime-type) ;; Gemini bug.
+                           "text/plain"
+                           mime-type)))
+       (if (str:starts-with? "text/" mime-type*)
+           (part (uiop:read-file-string path))
+           (part
+            (object
+             :data (file->blob path)
+             :mime-type mime-type*)))))))
+
+(defun expand-pathname (file)
+  (cond ((consp file) (list file))
+        ((wild-pathname-p file) (directory file))
+        (t (list file))))
+
+(defun expand-pathnames (files)
+  "Expands a list of file path specifications into absolute pathnames.
+   Each element in FILES can be a string or a list where the first element is the path."
+  (mappend #'expand-pathname files))
 
 (defun prepare-file-parts (files)
   "Converts a list of file specifications into a list of PART objects.
    Each element in FILES should be a path string or a list (PATH &optional MIME-TYPE)."
-  (map 'list (lambda (file-spec)
-               (destructuring-bind (path &optional mime-type)
-                   (if (listp file-spec) file-spec (list file-spec))
-                 (if mime-type
-                     (file->part path :mime-type mime-type)
-                     (file->part path))))
-       files))
+  (remove nil
+          (map 'list (lambda (file-spec)
+                       (destructuring-bind (path &optional mime-type)
+                           (if (listp file-spec) file-spec (list file-spec))
+                         (if mime-type
+                             (file->part path :mime-type mime-type)
+                             (file->part path))))
+               (expand-pathnames files))))
 
 (defun merge-user-prompt-and-files (prompt-contents file-parts)
   "Merges file-parts into the first user content object in the prompt-contents list.
@@ -397,6 +410,9 @@
     (when bash-history
       (part bash-history))))
 
+(defvar *turbo* nil
+  "If true, indicates that the prompt should be treated as a turbo prompt, which may trigger different behavior in content generation and system instructions.")
+
 (defun ->prompt (thing &optional (content-generator *default-content-generator*))
   "Converts a thing into a list of content objects."
   (cond ((content? thing) (list thing))
@@ -405,8 +421,9 @@
                                               (list (when *include-timestamp* (part (prompt-timestamp)))
                                                     (when *include-model* (part
                                                                            (format nil "Model: ~a"
-                                                                                   (or (get-model content-generator)
-                                                                                       +default-model+))))
+                                                                                   (cond (*turbo* (cdr (assoc *turbo* +turbo-mapping+)))
+                                                                                         (t (or (get-model content-generator)
+                                                                                                +default-model+))))))
                                                     (when *include-bash-history* (prompt-bash-history-part))
                                                     thing))
                                       :role "user")))
@@ -415,8 +432,10 @@
                                                 (list (when *include-timestamp* (part (prompt-timestamp)))
                                                       (when *include-model* (part
                                                                              (format nil "Model: ~a"
-                                                                                     (or (get-model content-generator)
-                                                                                         +default-model+))))
+                                                                                     (cond (*turbo* (cdr (assoc *turbo* +turbo-mapping+)))
+                                                                                           (t
+                                                                                            (or (get-model content-generator)
+                                                                                                +default-model+))))))
                                                       (when *include-bash-history* (prompt-bash-history-part))
                                                       (part thing)))
                                         :role "user")))
@@ -473,7 +492,7 @@
           (setf (get-usage-metadata stripped) (get-usage-metadata results)))
         stripped))))
 
-(defun print-text (results)
+(defun print-text (bowdlerize results)
   "Prints the text parts from the results to *trace-output*.
    Returns the results unchanged."
   (let ((candidates (get-candidates results)))
@@ -487,7 +506,11 @@
           (when content
             (dolist (part (coerce (get-parts content) 'list))
               (when (text-part? part)
-                (format *trace-output* "~&~a~%" (get-text part)))))))))
+                (format *trace-output* "~&~a~%"
+                        (if bowdlerize
+                            (cl-ppcre:regex-replace-all
+                             bowdlerize (get-text part)  "")
+                            (get-text part))))))))))
   results)
 
 (defun extract-function-calls-from-candidate (candidate)
@@ -545,7 +568,8 @@
   (multiple-value-bind (sec min hour day mon year dow dst tz)
       (decode-universal-time (get-universal-time))
     (declare (ignore sec min hour year dow dst tz))
-    (cond ((and (= mon 9) (= day 19)) "a pirate. Arrr!")
+    (cond ((and (= mon 5) (= day 5)) "a Mexican revolutionary. ¡Viva la revolución!")
+          ((and (= mon 9) (= day 19)) "a pirate. Arrr!")
           ((and (= mon 10) (= day 31)) "a spooky ghost.")
           ((and (= mon 11) (= day 11)) "a World War I soldier.")
           ((and (= mon 12) (= day 25)) "the ghost of Christmas Past.")
@@ -576,127 +600,148 @@
       (content :parts (map 'list #'part contents)
                :role "system"))))
 
+(defparameter +turbo-mapping+
+  '((#\$ . "models/gemini-3.1-pro-preview")
+    (#\* . "models/gemini-pro-latest")))
 
-(defun generate-content (content-generator context prompt files system-instruction)
+(defun turbo-prompt? (prompt)
+  "Determines if the prompt should trigger turbo mode based on its first character."
+  (and (stringp prompt)
+       (> (length prompt) 0)
+       (member (char prompt 0) +turbo-mapping+ :key #'car)))
+
+(defun generate-content (content-generator context prompt files system-instruction &key turbo)
   (if (and (consp prompt)
            (eq (car prompt) :set-model!))
       (setf (get-model content-generator) (cadr prompt))
 
-  ;; Merge the files into the prompt.
-  (let* ((file-parts (when files (prepare-file-parts files)))
-         (prompt-contents-base (let ((*include-timestamp* (get-include-timestamp content-generator))
-                                     (*include-model* (get-include-model content-generator))
-                                     (*include-bash-history* (get-include-bash-history content-generator)))
-                                 (->prompt prompt content-generator)))
-         (prompt-contents (if file-parts
-                              (merge-user-prompt-and-files prompt-contents-base file-parts)
-                              prompt-contents-base))
-         (prompt-contents-and-context (append context prompt-contents)))
-    (assert (list-of-content? prompt-contents)
-            () "Prompt must be a list of content objects.")
-    (let ((payload (object :contents prompt-contents-and-context)))
-      ;; Add other payload parts before counting tokens
-      ;; Note:  Nominally, we'd want to do this, but the countTokens API rejects the payload if we do!
-      
-      ;; (when cached-content (setf (get-cached-content payload) cached-content))
-      ;; (when generation-config (setf (get-generation-config payload) generation-config))
-      ;; (when safety-settings (setf (get-safety-settings payload) safety-settings))
-      ;; (when system-instruction (setf (get-system-instruction payload) system-instruction))
-      ;; (when tools (setf (get-tools payload) tools))
-      ;; (when (and tools tool-config) (setf (get-tool-config payload) tool-config))
+      ;; Merge the files into the prompt.
+      (let* ((file-parts (when files (prepare-file-parts files)))
+             ;; Turbo logic: Check the keyword arg OR the string prefix
+             (turbo-prompt (turbo-prompt? prompt))
+             (effective-turbo (or turbo (and turbo-prompt (char prompt 0))))
+             ;; If the prompt triggered turbo, strip the '*'
+             (effective-prompt (if turbo-prompt
+                             (subseq prompt 1)
+                             prompt))
+             (prompt-contents-base (let ((*include-timestamp* (get-include-timestamp content-generator))
+                                         (*include-model* (get-include-model content-generator))
+                                         (*turbo* effective-turbo)
+                                         (*include-bash-history* (get-include-bash-history content-generator)))
+                                     (->prompt effective-prompt content-generator)))
+             (prompt-contents (if file-parts
+                                  (merge-user-prompt-and-files prompt-contents-base file-parts)
+                                  prompt-contents-base))
+             (prompt-contents-and-context (append context prompt-contents)))
+        (assert (list-of-content? prompt-contents)
+                () "Prompt must be a list of content objects.")
+        (let ((payload (object :contents prompt-contents-and-context)))
+          ;; Add other payload parts before counting tokens
+          ;; Note:  Nominally, we'd want to do this, but the countTokens API rejects the payload if we do!
 
-      ;; Count the tokens.  If the count exceeds the limit, we truncate the context until it is smaller
-      ;; than half the limit.
-      (handler-case
-          (let iter ((total-tokens (get-total-tokens
-                                    (%count-tokens (get-model content-generator) payload)))
-                     (limit +max-prompt-tokens+)
-                     (cdr-count 1))
-            (cond ((> total-tokens 1000000)
-                   (cerror "Proceed anyway" "Token count (~d) exceeds maximum allowed limit." total-tokens))
-                  ((> total-tokens 900000)
-                   (warn "Token count (~d) is extremely high; Gemini may reject the request." total-tokens))
-                  ((> total-tokens 800000)
-                   (warn "Token count (~d) is very high; consider reducing prompt size." total-tokens))
-                  ((> total-tokens 500000)
-                   (warn "Token count (~d) is high; consider reducing prompt size." total-tokens))
-                  ((> total-tokens 200000)
-                   (warn "Token count (~d) is moderately high, premium rates apply." total-tokens))
-                  (t nil)))
-        (timeout-error (c)
-          (declare (ignore c))
-          (warn "Token counting timed out after ~d seconds." +count-tokens-timeout+)))
+          ;; (when cached-content (setf (get-cached-content payload) cached-content))
+          ;; (when generation-config (setf (get-generation-config payload) generation-config))
+          ;; (when safety-settings (setf (get-safety-settings payload) safety-settings))
+          ;; (when system-instruction (setf (get-system-instruction payload) system-instruction))
+          ;; (when tools (setf (get-tools payload) tools))
+          ;; (when (and tools tool-config) (setf (get-tool-config payload) tool-config))
 
-      (when (get-cached-content content-generator)
-        (setf (get-cached-content payload) (get-cached-content content-generator)))
-      (when (get-generation-config content-generator)
-        (setf (get-generation-config payload) (get-generation-config content-generator)))
-      (when (get-safety-settings content-generator)
-        (setf (get-safety-settings payload) (get-safety-settings content-generator)))
-      (let ((system-instruction (compute-system-instruction content-generator system-instruction)))
-        (when system-instruction
-          (setf (get-system-instruction payload) system-instruction)))
-      (when (get-tools content-generator)
-        (setf (get-tools payload) (get-tools content-generator)))
-      (when (and (get-tools content-generator)
-                 (get-tool-config content-generator))
-        (setf (get-tool-config payload) (get-tool-config content-generator)))
+          ;; Count the tokens.  If the count exceeds the limit, we truncate the context until it is smaller
+          ;; than half the limit.
+          (handler-case
+              (let iter ((total-tokens (get-total-tokens
+                                        (%count-tokens (get-model content-generator) payload)))
+                         (limit +max-prompt-tokens+)
+                         (cdr-count 1))
+                (cond ((> total-tokens 1000000)
+                       (cerror "Proceed anyway" "Token count (~d) exceeds maximum allowed limit." total-tokens))
+                      ((> total-tokens 900000)
+                       (warn "Token count (~d) is extremely high; Gemini may reject the request." total-tokens))
+                      ((> total-tokens 800000)
+                       (warn "Token count (~d) is very high; consider reducing prompt size." total-tokens))
+                      ((> total-tokens 500000)
+                       (warn "Token count (~d) is high; consider reducing prompt size." total-tokens))
+                      ((> total-tokens 200000)
+                       (warn "Token count (~d) is moderately high, premium rates apply." total-tokens))
+                      (t nil)))
+            (timeout-error (c)
+              (declare (ignore c))
+              (warn "Token counting timed out after ~d seconds." +count-tokens-timeout+)))
 
-      (let reinvoke ((count 0)
-                     (temperature (and (get-generation-config payload)
-                                       (get-temperature (get-generation-config payload)))))
-        (if (>= count 10)
-            (error "Failed to get a valid response from Gemini after ~d attempts." count)
-            ;; Adjust temperature and retry
-            (progn
-              (and temperature (if (get-generation-config payload)
-                                   (setf (get-temperature (get-generation-config payload)) temperature)
-                                   (setf (get-generation-config payload)
-                                         (object :temperature temperature))))
-              ;; Invoke Gemini API.  If the count is 5 or more, we switch to the "gemini-pro-latest" model
-              ;; to try to get a better response.
-              (let ((response (%%invoke-gemini (if (< count 2)
-                                                   (get-model content-generator)
-                                                   "models/gemini-pro-latest")
-                                               payload)))
-                ;; Check for error response
-                (when (get-error response)
-                  (error "Error from Gemini (code ~d): ~a"
-                         (get-code (get-error response))
-                         (get-message (get-error response))))
-                ;; Process usage metadata
-                (let ((usage-metadata (get-usage-metadata response)))
-                  (when usage-metadata
-                    (process-usage-metadata usage-metadata)))
-                ;; Process the response - fetch first candidate
-                (let* ((response* (strip-and-print-thoughts response))
-                       (candidates (get-candidates response*))
-                       (first-candidate (cond ((consp candidates) (car candidates))
-                                              ((and (vectorp candidates)
-                                                    (> (length candidates) 0))
-                                               (svref candidates 0))
-                                              (t nil))))
-                  (print-text response*)
-                  (let ((function-calls (extract-function-calls-from-results response*)))
-                    (cond (function-calls
-                           (let ((function-results
-                                   (map 'list (compose (default-process-function-call content-generator)
-                                                       #'get-function-call)
-                                        function-calls)))
-                             (assert (list-of-parts? function-results) ()
-                                     "Expected function-results to be a list of parts.")
-                             (generate-content content-generator
-                                               prompt-contents-and-context
-                                               (content :parts function-results
-                                                        :role "function")
-                                               files
-                                               system-instruction)))
-                          (first-candidate (get-content first-candidate))
-                          (t
-                           ;; fall through case - reinvoke with higher temperature
-                           (reinvoke (+ count 1)
-                                     (let ((temp (or temperature 1.0)))
-                                       (- 2.0 (/ (- 2.0 temp) 2))))))))))))))))
+          (when (get-cached-content content-generator)
+            (setf (get-cached-content payload) (get-cached-content content-generator)))
+          (when (get-generation-config content-generator)
+            (setf (get-generation-config payload) (get-generation-config content-generator)))
+          (when (get-safety-settings content-generator)
+            (setf (get-safety-settings payload) (get-safety-settings content-generator)))
+          (let ((system-instruction (compute-system-instruction content-generator system-instruction)))
+            (when system-instruction
+              (setf (get-system-instruction payload) system-instruction)))
+          (when (get-tools content-generator)
+            (setf (get-tools payload) (get-tools content-generator)))
+          (when (and (get-tools content-generator)
+                     (get-tool-config content-generator))
+            (setf (get-tool-config payload) (get-tool-config content-generator)))
+
+          (let reinvoke ((count 0)
+                         (temperature (and (get-generation-config payload)
+                                           (get-temperature (get-generation-config payload)))))
+            (if (>= count 10)
+                (error "Failed to get a valid response from Gemini after ~d attempts." count)
+                ;; Adjust temperature and retry
+                (progn
+                  (and temperature (if (get-generation-config payload)
+                                       (setf (get-temperature (get-generation-config payload)) temperature)
+                                       (setf (get-generation-config payload)
+                                             (object :temperature temperature))))
+                  ;; Invoke Gemini API.  If the count is 5 or more, we switch to the "gemini-pro-latest" model
+                  ;; to try to get a better response.
+                  ;; TURBO FIX: Use gemini-pro-latest if effective-turbo is true
+                  (let ((response (%%invoke-gemini (cond (effective-turbo
+                                                          (cdr (assoc effective-turbo +turbo-mapping+)))
+                                                         ((> count 2) "models/gemini-pro-latest")
+                                                         (t (get-model content-generator)))
+                                                   payload)))
+                    ;; Check for error response
+                    (when (get-error response)
+                      (error "Error from Gemini (code ~d): ~a"
+                             (get-code (get-error response))
+                             (get-message (get-error response))))
+                    ;; Process usage metadata
+                    (let ((usage-metadata (get-usage-metadata response)))
+                      (when usage-metadata
+                        (process-usage-metadata usage-metadata)))
+                    ;; Process the response - fetch first candidate
+                    (let* ((response* (strip-and-print-thoughts response))
+                           (candidates (get-candidates response*))
+                           (first-candidate (cond ((consp candidates) (car candidates))
+                                                  ((and (vectorp candidates)
+                                                        (> (length candidates) 0))
+                                                   (svref candidates 0))
+                                                  (t nil))))
+                      (print-text (get-bowdlerize content-generator) response*)
+                      (let ((function-calls (extract-function-calls-from-results response*)))
+                        (cond (function-calls
+                               (let ((function-results
+                                       (map 'list (compose (default-process-function-call content-generator)
+                                                           #'get-function-call)
+                                            function-calls)))
+                                 (assert (list-of-parts? function-results) ()
+                                         "Expected function-results to be a list of parts.")
+                                 ;; RECURSIVE CALL: Pass effective-turbo to keep the flag sticky
+                                 (generate-content content-generator
+                                                   prompt-contents-and-context
+                                                   (content :parts function-results
+                                                            :role "function")
+                                                   files
+                                                   system-instruction
+                                                   :turbo effective-turbo)))
+                              (first-candidate (get-content first-candidate))
+                              (t
+                               ;; fall through case - reinvoke with higher temperature
+                               (reinvoke (+ count 1)
+                                         (let ((temp (or temperature 1.0)))
+                                           (- 2.0 (/ (- 2.0 temp) 2))))))))))))))))
 
 (defun initial-conversation (content-generator)
   (let ((base (list (part (format nil "**This is conversation #~d.**" (get-universal-time))))))
@@ -781,12 +826,46 @@
                           (setq conversation restored-conversation)
                           'restored)))
                      ((and (consp prompt)
+                           (eq (car prompt) :checkpoint!))
+                      (with-open-file (stream (merge-pathnames
+                                               (make-pathname :name (cadr prompt)
+                                                              :type "lisp")
+                                               (persona-checkpoint-directory (get-config content-generator)))
+                                            :direction :output
+                                            :if-does-not-exist :create
+                                            :if-exists :supersede)
+                        (let ((*print-pretty* nil)
+                              (*print-readably* t)
+                              (*print-circle* t)
+                              (*print-level* nil)
+                              (*print-length* nil))
+                          (write conversation
+                                 :stream stream
+                                 :escape t
+                                 :pretty nil
+                                 :circle t
+                                 :readably t))))
+                     ((and (consp prompt)
+                           (eq (car prompt) :restore!))
+                      (with-open-file (stream (merge-pathnames
+                                               (make-pathname :name (cadr prompt)
+                                                              :type "lisp")
+                                               (persona-checkpoint-directory (get-config content-generator)))
+                                            :direction :input
+                                            :if-does-not-exist :error)
+                        (let ((restored-conversation (read stream)))
+                          (assert (list-of-content? restored-conversation)
+                                  () "Restored conversation must be a list of content objects.")
+                          (setq conversation restored-conversation)
+                          'restored)))
+                     ((and (consp prompt)
                            (eq (car prompt) :set-model!))
                       (funcall content-generator prompt))
                      (t
-                      (let ((llm-prediction (funcall content-generator prompt
-                                                     :context conversation
-                                                     :files files)))
+                      (let ((llm-prediction (funcall content-generator
+                                                      prompt
+                                                      :context conversation
+                                                      :files files)))
                           (setq conversation
                                 (append conversation (list (->prompt prompt content-generator)
                                                            (list llm-prediction)))))
@@ -832,6 +911,12 @@
   (apply #'make-instance 'persona-config
          :name persona-name
          (file->form-list (persona-config-file persona-name))))
+
+(defun persona-checkpoint-directory (persona-config)
+  "Returns the checkpoint directory path for a specific persona."
+  (merge-pathnames
+   (get-checkpoint-directory persona-config)
+   (persona-directory (get-name persona-config))))
 
 (defun persona-checkpoint-file (persona-config)
   "Returns the checkpoint file path for a specific persona."
@@ -1023,20 +1108,26 @@
 (defvar *default-content-generator*)
 (defvar *gemini-pro*)
 (defvar *gemini-flash*)
+(defvar *gemini-flash-lite*)
 
 (eval-when (:compile-toplevel :load-toplevel :execute)
   (setf (documentation '*default-content-generator* 'variable) "The default content generator instance.")
   (setf (documentation '*gemini-flash* 'variable) "The content generator for Gemini flash.")
+  (setf (documentation '*gemini-flash-lite* 'variable) "The content generator for Gemini flash lite.")
   (setf (documentation '*gemini-pro* 'variable) "The content generator for Gemini Pro."))
 
 (eval-when (:load-toplevel :execute)
   (setq *default-content-generator* (persona-name->content-generator "Default"))
   (setq *gemini-flash* (persona-name->content-generator "GeminiFlash"))
+  (setq *gemini-flash-lite* (persona-name->content-generator "GeminiFlashLite"))
   (setq *gemini-pro* (persona-name->content-generator "GeminiPro")))
 
 (defun invoke-gemini (prompt &key context files system-instruction)
   "Invokes the default Gemini persona with the given PROMPT, FILES, and optional SYSTEM-INSTRUCTION."
   (generate-content *default-content-generator* context prompt files system-instruction))
+
+(defun gemini-flash-lite (prompt &key context files system-instruction)
+  (generate-content *gemini-flash-lite* context prompt files system-instruction))
 
 (defun gemini-flash (prompt &key context files system-instruction)
   (generate-content *gemini-flash* context prompt files system-instruction))
@@ -1075,23 +1166,25 @@
    Sets the global *chat-persona* variable to a chatbot function configured for the persona."
   (setq *chat-persona* (reload-persona persona-name prompt)))
 
-(defun chat (prompt)
-  "Sends a PROMPT to the current chat persona and returns the response."
-  (funcall *chat-persona* prompt)
+(defun chat (prompt &key files)
+  "Sends a PROMPT to the current chat persona and prints the response."
+  (if files
+      (funcall *chat-persona* prompt :files files)
+      (funcall *chat-persona* prompt))
   nil)
 
 (defun continue-gemini (prompt)
-  "Sends a PROMPT to the default Gemini persona chatbot and returns the response."
+  "Sends a PROMPT to the default Gemini persona chatbot and prints the response."
   (funcall *default-persona-chatbot* prompt)
   nil)
 
 (defun gemini-flash-chat (prompt)
-  "Sends a PROMPT to the Gemini Pro chatbot and returns the response."
+  "Sends a PROMPT to the Gemini Flash chatbot and prints the response."
   (funcall *gemini-flash-chatbot* prompt)
   nil)
 
 (defun gemini-pro-chat (prompt)
-  "Sends a PROMPT to the Gemini Pro chatbot and returns the response."
+  "Sends a PROMPT to the Gemini Pro chatbot and prints the response."
   (funcall *gemini-pro-chatbot* prompt)
   nil)
 

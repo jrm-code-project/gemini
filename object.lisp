@@ -7,6 +7,7 @@
   :autonym
   :behavior
   :blob
+  :bowdlerize
   :cached-content
   :candidate-count
   :candidates
@@ -493,7 +494,10 @@
 
 (defclass persona-config ()
   ((name :initarg :name :accessor get-name)
+   (bowdlerize           :initarg :bowdlerize           :initform nil :accessor get-bowdlerize)
    (cached-content       :initarg :cached-content       :initform nil :accessor get-cached-content)
+   (checkpoint-directory :initarg :checkpoint-directory :initform (make-pathname :directory (list :relative "Checkpoints"))
+                         :accessor get-checkpoint-directory)
    (checkpoint-pathname  :initarg :checkpoint-pathname   :initform (make-pathname :name "checkpoint" :type "lisp")
                          :accessor get-checkpoint-pathname)
    (diary-directory      :initarg :diary-directory      :initform (make-pathname :directory (list :relative "Diary"))
@@ -574,8 +578,14 @@
   (setf (slot-value instance 'memory-mcp-server)
         (memory-mcp-server (persona-memory-file config))))
 
+(defmethod get-bowdlerize ((object content-generator))
+  (get-bowdlerize (get-config object)))
+
 (defmethod get-cached-content ((object content-generator))
   (get-cached-content (get-config object)))
+
+(defmethod get-checkpoint-directory ((object content-generator))
+  (get-checkpoint-directory (get-config object)))
 
 (defmethod get-checkpoint-pathname ((object content-generator))
   (get-checkpoint-pathname (get-config object)))

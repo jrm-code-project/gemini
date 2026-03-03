@@ -559,6 +559,7 @@ Does not add values to ALISTS."
       ((string-equal extension "jpeg") "image/jpeg")
       ((string-equal extension "jpg")  "image/jpeg")
       ((string-equal extension "json") "application/json")
+      ((string-equal extension "lsp")  "text/plain") ; Common Lisp files are plain text
       ((string-equal extension "lisp") "text/plain") ; Common Lisp files are plain text
       ((string-equal extension "md")   "text/markdown")
       ((string-equal extension "pdf")  "application/pdf")
@@ -566,7 +567,7 @@ Does not add values to ALISTS."
       ((string-equal extension "txt")  "text/plain")
       ((string-equal extension "webp") "image/webp")
       ((string-equal extension "xml")  "application/xml")
-      (t "application/octet-stream"))))
+      (t "text/plain"))))
 
 (defun file->blob (path)
   "Returns the contents of the file at PATH as a base64-encoded string.
