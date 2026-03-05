@@ -65,14 +65,17 @@
 
 (defun reflow-line (line)
   "Reflow a single line to a list of lines, each no longer than 80 characters."
-  (if (<= (length line) +line-length-limit+)
-      (list line)
-      (let ((space-pos (or (position #\Space line :from-end t :end (1+ +line-length-limit+))
-                           (position #\Space line :start (1+ +line-length-limit+)))))
-        (if (null space-pos)
-            (list line)
-            (cons (subseq line 0 space-pos)
-                  (reflow-line (subseq line (min (1+ space-pos) (length line)))))))))
+  (let next ((line line)
+             (limit (- +line-length-limit+ 2)))
+    (if (<= (length line) limit)
+        (list line)
+        (let ((space-pos (or (position #\Space line :from-end t :end (1+ limit))
+                             (position #\Space line :start (1+ limit)))))
+          (if (null space-pos)
+              (list line)
+              (cons (subseq line 0 space-pos)
+                    (next (subseq line (min (1+ space-pos) (length line)))
+                          +line-length-limit+)))))))
 
 (defun key? (thing)
   "Checks if THING is a valid key (either a keyword or a string)."

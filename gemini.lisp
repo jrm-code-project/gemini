@@ -508,11 +508,13 @@
           (when content
             (dolist (part (coerce (get-parts content) 'list))
               (when (text-part? part)
-                (format *trace-output* "~&~a~%"
-                        (if bowdlerize
-                            (cl-ppcre:regex-replace-all
-                             bowdlerize (get-text part)  "")
-                            (get-text part))))))))))
+                (format *trace-output* "~&~{  ~{~a~%~}~}~%"
+                        (map 'list #'reflow-line
+                                 (str:split #\newline
+                                            (if bowdlerize
+                                                (cl-ppcre:regex-replace-all
+                                                 bowdlerize (get-text part)  "")
+                                                (get-text part))))))))))))
   results)
 
 (defun extract-function-calls-from-candidate (candidate)
