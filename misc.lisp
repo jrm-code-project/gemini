@@ -65,7 +65,7 @@
 
 (defun reflow-line (line)
   "Reflow a single line to a list of lines, each no longer than 80 characters."
-  (let next ((line line)
+  (let next ((line (string-trim (list #\Space) line))
              (limit (- +line-length-limit+ 2)))
     (if (<= (length line) limit)
         (list line)

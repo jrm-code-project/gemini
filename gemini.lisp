@@ -496,25 +496,89 @@
 
 (defun print-text (bowdlerize results)
   "Prints the text parts from the results to *trace-output*.
+   Reflows prose into 80-column paragraphs but preserves 
+   markdown code blocks exactly as written.
    Returns the results unchanged."
-  (let ((candidates (get-candidates results)))
-    (when candidates
-      (dolist (candidate (if (consp candidates)
-                             candidates
-                             (and (vectorp candidates)
-                                  (> (length candidates) 0)
-                                  (coerce candidates 'list))))
-        (let ((content (get-content candidate)))
-          (when content
-            (dolist (part (coerce (get-parts content) 'list))
-              (when (text-part? part)
-                (format *trace-output* "~&~{  ~{~a~%~}~}~%"
-                        (map 'list #'reflow-line
-                                 (str:split #\newline
-                                            (if bowdlerize
-                                                (cl-ppcre:regex-replace-all
-                                                 bowdlerize (get-text part)  "")
-                                                (get-text part))))))))))))
+  (labels ((reflow-paragraph (lines)
+             ;; Combine lines, compress whitespace, and word-wrap to 80 columns
+             (let* ((joined (str:join " " lines))
+                    (clean (cl-ppcre:regex-replace-all "\\s+" joined " "))
+                    (words (str:split " " (str:trim clean))))
+               (let wrap ((remaining (remove "" words :test #'string=))
+                          (col 0)
+                          (acc nil))
+                 (if (null remaining)
+                     (when acc (format *trace-output* "~&~{~a~^ ~}~%" (reverse acc)))
+                     (let* ((word (car remaining))
+                            (len (length word)))
+                       (if (and acc (> (+ col len 1) 80))
+                           (progn
+                             (format *trace-output* "~&~{~a~^ ~}~%" (reverse acc))
+                             (wrap (cdr remaining) len (list word)))
+                           (wrap (cdr remaining) (+ col len (if acc 1 0)) (cons word acc))))))))
+           (process-text-buffer (lines)
+             ;; Group buffered lines into paragraphs (separated by blank lines)
+             (let next ((remaining lines) (para-acc nil))
+               (cond ((null remaining)
+                      (when para-acc (reflow-paragraph (reverse para-acc))))
+                     ((str:emptyp (str:trim (car remaining)))
+                      (when para-acc (reflow-paragraph (reverse para-acc)))
+                      (format *trace-output* "~%")
+                      (next (cdr remaining) nil))
+                     (t
+                      (next (cdr remaining) (cons (car remaining) para-acc)))))))
+
+    (let ((candidates (get-candidates results)))
+      (when candidates
+        (dolist (candidate (if (consp candidates)
+                               candidates
+                               (and (vectorp candidates)
+                                    (> (length candidates) 0)
+                                    (coerce candidates 'list))))
+          (let ((content (get-content candidate)))
+            (when content
+              (let next-part ((parts (coerce (get-parts content) 'list)))
+                (when parts
+                  (if (not (text-part? (car parts)))
+                      (next-part (cdr parts))
+                      (let* ((text (get-text (car parts)))
+                             (clean-text (if bowdlerize
+                                             (cl-ppcre:regex-replace-all bowdlerize text "")
+                                             text)))
+                        ;; The core fix: burn down the string line-by-line using a state machine
+                        (let process-lines ((lines (str:split #\Newline clean-text))
+                                            (in-code-p nil)
+                                            (text-buffer nil))
+                          (cond
+                            ((null lines)
+                             ;; End of the part. Flush any remaining prose buffer to the reflower.
+                             (when text-buffer
+                               (process-text-buffer (reverse text-buffer)))
+                             (next-part (cdr parts)))
+                            (t
+                             (let* ((line (car lines))
+                                    (is-fence (str:starts-with? "```" (str:trim line))))
+                               (cond
+                                 (is-fence
+                                  (if in-code-p
+                                      ;; We are closing a code block
+                                      (progn
+                                        (format *trace-output* "~&~a~%" line)
+                                        (process-lines (cdr lines) nil nil))
+                                      ;; We are opening a code block
+                                      (progn
+                                        ;; Flush the accumulated prose *before* printing the fence
+                                        (when text-buffer
+                                          (process-text-buffer (reverse text-buffer)))
+                                        (format *trace-output* "~&~a~%" line)
+                                        (process-lines (cdr lines) t nil))))
+                                 (in-code-p
+                                  ;; We are inside a code block. Print it raw.
+                                  (format *trace-output* "~&~a~%" line)
+                                  (process-lines (cdr lines) t nil))
+                                 (t
+                                  ;; We are outside a code block. Buffer the prose for reflowing.
+                                  (process-lines (cdr lines) nil (cons line text-buffer))))))))))))))))))
   results)
 
 (defun extract-function-calls-from-candidate (candidate)
@@ -718,7 +782,8 @@
                                                          files
                                                          system-instruction
                                                          :turbo effective-turbo)))
-                                    (first-candidate (get-content first-candidate))
+                                    (first-candidate
+                                     (get-content first-candidate))
                                     (t
                                      (reinvoke (+ count 1)
                                                (let ((temp (or temperature 1.0)))
