@@ -503,7 +503,7 @@
              ;; Combine lines, compress whitespace, and word-wrap to 80 columns
              (let* ((joined (str:join " " lines))
                     (clean (cl-ppcre:regex-replace-all "\\s+" joined " "))
-                    (words (str:split " " (str:trim clean))))
+                    (words (cons " " (str:split " " (str:trim clean)))))
                (let wrap ((remaining (remove "" words :test #'string=))
                           (col 0)
                           (acc nil))
