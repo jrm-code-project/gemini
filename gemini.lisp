@@ -757,20 +757,33 @@
                                            (invoke-restart restart))))))
                       (restart-case 
                           (let ((response (%%invoke-gemini current-model payload)))
+
                             (when (get-error response)
                               (error "Error from Gemini (code ~d): ~a"
                                      (get-code (get-error response))
                                      (get-message (get-error response))))
                             
-                            (let ((usage-metadata (get-usage-metadata response)))
-                              (when usage-metadata
-                                (process-usage-metadata usage-metadata)))
-                            
-                            (let* ((response* (strip-and-print-thoughts response))
+                            (let* ((usage-metadata (get-usage-metadata response))
+                                   (response* (strip-and-print-thoughts response))
                                    (candidates (get-candidates response*))
                                    (first-candidate (cond ((consp candidates) (car candidates))
-                                                          ((and (vectorp candidates) (> (length candidates) 0)) (svref candidates 0))
+                                                          ((and (vectorp candidates)
+                                                                (> (length candidates) 0))
+                                                           (svref candidates 0))
                                                           (t nil))))
+                              (when usage-metadata
+                                (process-usage-metadata usage-metadata)
+                                (unless (> (get-candidates-token-count usage-metadata) 1)
+                                  (format *trace-output* "~&;; Response too thin, retrying with stronger model.~%")
+                                  (return-from generate-content
+                                    (let* ((content (get-content first-candidate)))
+                                      (generate-content content-generator
+                                                        (append prompt-contents-and-context (list content))
+                                                        "?! Please continue"
+                                                        files
+                                                        system-instruction
+                                                        :turbo #\$)))))
+                            
                               (print-text (get-bowdlerize content-generator) response*)
                               
                               (let ((function-calls (extract-function-calls-from-results response*)))
@@ -791,25 +804,8 @@
                                       (first-candidate
                                        (let* ((content (get-content first-candidate))
                                               (parts (when content (get-parts content)))
-                                              (text-val (when parts (get-text (car parts))))
-                                              ;; Check if the response is a dud (< 2 chars of actual text)
-                                              (is-thin (and text-val 
-                                                            (< (length (string-trim '(#\Space #\Newline #\Tab) text-val)) 2))))
-                                         (if is-thin
-                                             (let ((old-model (get-model content-generator)))
-                                               ;; The Boss commands an escalation. Lock and load the big gun.
-                                               (setf (get-model content-generator) "models/gemini-3.1-pro-preview")
-                                               (unwind-protect
-                                                   (generate-content content-generator
-                                                                     (append prompt-contents-and-context (list content))
-                                                                     "?! Please continue"
-                                                                     files
-                                                                     system-instruction
-                                                                     :turbo nil) ; Strip turbo to ensure we stay on Pro
-                                                 ;; Gracefully put the gun back in the holster
-                                                 (setf (get-model content-generator) old-model)))
-                                             content)))
-                                      
+                                              (text-val (when parts (get-text (car parts)))))
+                                         text-val))
                                       (t
                                        (reinvoke (+ count 1)
                                                  (let ((temp (or current-temperature 1.0)))
