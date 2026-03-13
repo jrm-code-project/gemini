@@ -685,114 +685,139 @@
        (> (length prompt) 0)
        (member (char prompt 0) +turbo-mapping+ :key #'car)))
 
+(defun build-gemini-payload (content-generator context effective-prompt effective-turbo files system-instruction)
+  "Assembles the prompt, context, files, and generator configurations into a complete API payload."
+  (let* ((file-parts (when files (prepare-file-parts files)))
+         (prompt-contents-base 
+          (let ((*include-timestamp* (get-include-timestamp content-generator))
+                (*include-model* (get-include-model content-generator))
+                (*turbo* effective-turbo)
+                (*include-bash-history* (get-include-bash-history content-generator)))
+            (->prompt effective-prompt content-generator)))
+         (prompt-contents (if file-parts
+                              (merge-user-prompt-and-files prompt-contents-base file-parts)
+                              prompt-contents-base))
+         (prompt-contents-and-context (append context prompt-contents))
+         (payload (object :contents prompt-contents-and-context)))
+         
+    (assert (list-of-content? prompt-contents) () "Prompt must be a list of content objects.")
+    
+    ;; Inject config and tools
+    (when (get-cached-content content-generator)
+      (setf (get-cached-content payload) (get-cached-content content-generator)))
+    (when (get-generation-config content-generator)
+      (setf (get-generation-config payload) (get-generation-config content-generator)))
+    (when (get-safety-settings content-generator)
+      (setf (get-safety-settings payload) (get-safety-settings content-generator)))
+    (let ((sys-inst (compute-system-instruction content-generator system-instruction)))
+      (when sys-inst
+        (setf (get-system-instruction payload) sys-inst)))
+    (when (get-tools content-generator)
+      (setf (get-tools payload) (get-tools content-generator)))
+    (when (and (get-tools content-generator) (get-tool-config content-generator))
+      (setf (get-tool-config payload) (get-tool-config content-generator)))
+      
+    (values payload prompt-contents-and-context)))
+
 (defun generate-content (content-generator context prompt files system-instruction &key turbo)
-  (if (and (consp prompt)
-           (eq (car prompt) :set-model!))
+  "Evaluates a prompt, manages turbo/model state, builds the payload, and executes the reinvoke loop."
+  (if (and (consp prompt) (eq (car prompt) :set-model!))
       (setf (get-model content-generator) (cadr prompt))
-
-      (let* ((file-parts (when files (prepare-file-parts files)))
-             (turbo-prompt (turbo-prompt? prompt))
-             (effective-turbo (or turbo (and turbo-prompt (char prompt 0))))
-             (effective-prompt (if turbo-prompt
-                                   (subseq prompt 1)
-                                   prompt))
-             (prompt-contents-base (let ((*include-timestamp* (get-include-timestamp content-generator))
-                                         (*include-model* (get-include-model content-generator))
-                                         (*turbo* effective-turbo)
-                                         (*include-bash-history* (get-include-bash-history content-generator)))
-                                     (->prompt effective-prompt content-generator)))
-             (prompt-contents (if file-parts
-                                  (merge-user-prompt-and-files prompt-contents-base file-parts)
-                                  prompt-contents-base))
-             (prompt-contents-and-context (append context prompt-contents)))
-        (assert (list-of-content? prompt-contents)
-                () "Prompt must be a list of content objects.")
-        (let ((payload (object :contents prompt-contents-and-context)))
+      
+      (multiple-value-bind (effective-prompt effective-turbo)
+          (if (turbo-prompt? prompt)
+              (values (subseq prompt 1) (or turbo (char prompt 0)))
+              (values prompt turbo))
+        
+        (multiple-value-bind (payload prompt-contents-and-context)
+            (build-gemini-payload content-generator context effective-prompt effective-turbo files system-instruction)
           
-          ;; (Token counting handler-case omitted for brevity, keep your existing one here)
-
-          (when (get-cached-content content-generator)
-            (setf (get-cached-content payload) (get-cached-content content-generator)))
-          (when (get-generation-config content-generator)
-            (setf (get-generation-config payload) (get-generation-config content-generator)))
-          (when (get-safety-settings content-generator)
-            (setf (get-safety-settings payload) (get-safety-settings content-generator)))
-          (let ((system-instruction (compute-system-instruction content-generator system-instruction)))
-            (when system-instruction
-              (setf (get-system-instruction payload) system-instruction)))
-          (when (get-tools content-generator)
-            (setf (get-tools payload) (get-tools content-generator)))
-          (when (and (get-tools content-generator)
-                     (get-tool-config content-generator))
-            (setf (get-tool-config payload) (get-tool-config content-generator)))
-
-          ;; NEW: Pass the initial model into the reinvoke loop
-          (let reinvoke ((count 0)
-                         (temperature (and (get-generation-config payload)
-                                           (get-temperature (get-generation-config payload))))
-                         (current-model (cond (effective-turbo
-                                               (cdr (assoc effective-turbo +turbo-mapping+)))
-                                              (t (get-model content-generator)))))
-            (if (>= count 10)
-                (error "Failed to get a valid response from Gemini after ~d attempts." count)
-                (progn
-                  (and temperature (if (get-generation-config payload)
-                                       (setf (get-temperature (get-generation-config payload)) temperature)
-                                       (setf (get-generation-config payload)
-                                             (object :temperature temperature))))
-                  
-                  ;; RESTART AND HANDLER LOGIC
-                  (handler-bind ((dexador.error:http-request-service-unavailable
-                                   (lambda (c)
-                                     (declare (ignore c))
-                                     ;; If we're already on flash, there's nowhere lower to go, so just let it fail.
-                                     ;; Otherwise, invoke our new restart.
-                                     (let ((restart (find-restart 'use-weaker-model)))
-                                       (when (and restart (not (string= current-model +default-model+)))
-                                         (invoke-restart restart))))))
-                    (restart-case 
-                        (let ((response (%%invoke-gemini current-model payload)))
-                          (when (get-error response)
-                            (error "Error from Gemini (code ~d): ~a"
-                                   (get-code (get-error response))
-                                   (get-message (get-error response))))
-                          (let ((usage-metadata (get-usage-metadata response)))
-                            (when usage-metadata
-                              (process-usage-metadata usage-metadata)))
-                          (let* ((response* (strip-and-print-thoughts response))
-                                 (candidates (get-candidates response*))
-                                 (first-candidate (cond ((consp candidates) (car candidates))
-                                                        ((and (vectorp candidates)
-                                                              (> (length candidates) 0))
-                                                         (svref candidates 0))
-                                                        (t nil))))
-                            (print-text (get-bowdlerize content-generator) response*)
-                            (let ((function-calls (extract-function-calls-from-results response*)))
-                              (cond (function-calls
-                                     (let ((function-results
-                                             (map 'list (compose (default-process-function-call content-generator)
-                                                                 #'get-function-call)
-                                                  function-calls)))
-                                       (assert (list-of-parts? function-results) ()
-                                               "Expected function-results to be a list of parts.")
-                                       (generate-content content-generator
-                                                         prompt-contents-and-context
-                                                         (content :parts function-results
-                                                                  :role "function")
-                                                         files
-                                                         system-instruction
-                                                         :turbo effective-turbo)))
-                                    (first-candidate
-                                     (get-content first-candidate))
-                                    (t
-                                     (reinvoke (+ count 1)
-                                               (let ((temp (or temperature 1.0)))
-                                                 (- 2.0 (/ (- 2.0 temp) 2)))
-                                               current-model))))))
-                      (use-weaker-model ()
-                        :report (lambda (s) (format s "Switch from ~a to ~a and retry." current-model +default-model+))
-                        ;; Fall back to the economical model and retry the same count/temp
-                        (reinvoke count temperature +default-model+)))))))))))
+          (let ((initial-model (if effective-turbo
+                                   (cdr (assoc effective-turbo +turbo-mapping+))
+                                   (or (get-model content-generator) +default-model+)))
+                (initial-temperature (and (get-generation-config payload)
+                                          (get-temperature (get-generation-config payload)))))
+            
+            (let reinvoke ((count 0)
+                           (current-temperature initial-temperature)
+                           (current-model initial-model))
+              (if (>= count 10)
+                  (error "Failed to get a valid response from Gemini after ~d attempts." count)
+                  (progn
+                    (when current-temperature
+                      (if (get-generation-config payload)
+                          (setf (get-temperature (get-generation-config payload)) current-temperature)
+                          (setf (get-generation-config payload) (object :temperature current-temperature))))
+                    
+                    (handler-bind ((dexador.error:http-request-service-unavailable
+                                     (lambda (c)
+                                       (declare (ignore c))
+                                       (let ((restart (find-restart 'use-weaker-model)))
+                                         (when (and restart (not (string= current-model +default-model+)))
+                                           (invoke-restart restart))))))
+                      (restart-case 
+                          (let ((response (%%invoke-gemini current-model payload)))
+                            (when (get-error response)
+                              (error "Error from Gemini (code ~d): ~a"
+                                     (get-code (get-error response))
+                                     (get-message (get-error response))))
+                            
+                            (let ((usage-metadata (get-usage-metadata response)))
+                              (when usage-metadata
+                                (process-usage-metadata usage-metadata)))
+                            
+                            (let* ((response* (strip-and-print-thoughts response))
+                                   (candidates (get-candidates response*))
+                                   (first-candidate (cond ((consp candidates) (car candidates))
+                                                          ((and (vectorp candidates) (> (length candidates) 0)) (svref candidates 0))
+                                                          (t nil))))
+                              (print-text (get-bowdlerize content-generator) response*)
+                              
+                              (let ((function-calls (extract-function-calls-from-results response*)))
+                                (cond (function-calls
+                                       (let ((function-results
+                                               (map 'list (compose (default-process-function-call content-generator)
+                                                                   #'get-function-call)
+                                                    function-calls)))
+                                         (assert (list-of-parts? function-results) ()
+                                                 "Expected function-results to be a list of parts.")
+                                         (generate-content content-generator
+                                                           prompt-contents-and-context
+                                                           (content :parts function-results :role "function")
+                                                           files
+                                                           system-instruction
+                                                           :turbo effective-turbo)))
+                                      
+                                      (first-candidate
+                                       (let* ((content (get-content first-candidate))
+                                              (parts (when content (get-parts content)))
+                                              (text-val (when parts (get-text (car parts))))
+                                              ;; Check if the response is a dud (< 2 chars of actual text)
+                                              (is-thin (and text-val 
+                                                            (< (length (string-trim '(#\Space #\Newline #\Tab) text-val)) 2))))
+                                         (if is-thin
+                                             (let ((old-model (get-model content-generator)))
+                                               ;; The Boss commands an escalation. Lock and load the big gun.
+                                               (setf (get-model content-generator) "models/gemini-3.1-pro-preview")
+                                               (unwind-protect
+                                                   (generate-content content-generator
+                                                                     (append prompt-contents-and-context (list content))
+                                                                     "?! Please continue"
+                                                                     files
+                                                                     system-instruction
+                                                                     :turbo nil) ; Strip turbo to ensure we stay on Pro
+                                                 ;; Gracefully put the gun back in the holster
+                                                 (setf (get-model content-generator) old-model)))
+                                             content)))
+                                      
+                                      (t
+                                       (reinvoke (+ count 1)
+                                                 (let ((temp (or current-temperature 1.0)))
+                                                   (- 2.0 (/ (- 2.0 temp) 2)))
+                                                 current-model))))))
+                        (use-weaker-model ()
+                          :report (lambda (s) (format s "Switch from ~a to ~a and retry." current-model +default-model+))
+                          (reinvoke count current-temperature +default-model+))))))))))))
 
 (defun initial-conversation (content-generator)
   (let ((base (list (part (format nil "**This is conversation #~d.**" (get-universal-time))))))
