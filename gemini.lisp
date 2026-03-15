@@ -383,7 +383,8 @@
                      counts)))))
 
 (defun redact-token (token)
-  (if (> (calculate-string-entropy token) 3.0)
+  (if (and (> (length token) 6)
+           (> (calculate-string-entropy token) 3.5))
         "[REDACTED]"
         token))
 
@@ -416,30 +417,34 @@
 (defun ->prompt (thing &optional (content-generator *default-content-generator*))
   "Converts a thing into a list of content objects."
   (cond ((content? thing) (list thing))
-        ((part? thing) (list (content :parts
-                                      (remove nil
-                                              (list (when *include-timestamp* (part (prompt-timestamp)))
-                                                    (when *include-model* (part
-                                                                           (format nil "Model: ~a"
-                                                                                   (cond (*turbo* (cdr (assoc *turbo* +turbo-mapping+)))
-                                                                                         (t (or (get-model content-generator)
-                                                                                                +default-model+))))))
-                                                    (when *include-bash-history* (prompt-bash-history-part))
-                                                    (part (format nil "~%"))
-                                                    thing))
-                                      :role "user")))
-        ((stringp thing) (list (content :parts
-                                        (remove nil
-                                                (list (when *include-timestamp* (part (prompt-timestamp)))
-                                                      (when *include-model* (part
-                                                                             (format nil "Model: ~a~%"
-                                                                                     (cond (*turbo* (cdr (assoc *turbo* +turbo-mapping+)))
-                                                                                           (t
-                                                                                            (or (get-model content-generator)
-                                                                                                +default-model+))))))
-                                                      (when *include-bash-history* (prompt-bash-history-part))
-                                                      (part (format nil "~%"))
-                                                      (part thing)))
+        ((part? thing)
+         (list (content :parts
+                        (remove nil
+                                (list (when *include-timestamp* (part (prompt-timestamp)))
+                                      (when *include-model*
+                                        (part
+                                         (format nil "Model: ~a"
+                                                 (cond (*turbo* (cdr (assoc *turbo* +turbo-mapping+)))
+                                                       (t (or (get-model content-generator)
+                                                              +default-model+))))))
+                                      (when *include-bash-history* (prompt-bash-history-part))
+                                      (part (format nil "~%"))
+                                      thing))
+                        :role "user")))
+        ((stringp thing)
+         (list (content :parts
+                        (remove nil
+                                (list (when *include-timestamp* (part (prompt-timestamp)))
+                                      (when *include-model*
+                                        (part
+                                         (format nil "Model: ~a~%"
+                                                 (cond (*turbo* (cdr (assoc *turbo* +turbo-mapping+)))
+                                                       (t
+                                                        (or (get-model content-generator)
+                                                            +default-model+))))))
+                                      (when *include-bash-history* (prompt-bash-history-part))
+                                      (part (format nil "~%"))
+                                      (part thing)))
                                         :role "user")))
         ((list-of-content? thing) thing)
         ((list-of-parts? thing) (list (content :parts thing :role "user")))
@@ -773,10 +778,11 @@
                                                           (t nil))))
                               (when usage-metadata
                                 (process-usage-metadata usage-metadata)
-                                (unless (> (get-candidates-token-count usage-metadata) 1)
+                                (unless (> (or (get-candidates-token-count usage-metadata) 0) 1)
                                   (format *trace-output* "~&;; Response too thin, retrying with stronger model.~%")
                                   (return-from generate-content
-                                    (let* ((content (get-content first-candidate)))
+                                    (let* ((content (or (get-content first-candidate)
+                                                        (content :parts (list (part "[Empty Response]"))))))
                                       (generate-content content-generator
                                                         (append prompt-contents-and-context (list content))
                                                         "?! Please continue"
@@ -801,18 +807,15 @@
                                                            system-instruction
                                                            :turbo effective-turbo)))
                                       
-                                      (first-candidate
-                                       (let* ((content (get-content first-candidate))
-                                              (parts (when content (get-parts content)))
-                                              (text-val (when parts (get-text (car parts)))))
-                                         text-val))
+                                      (first-candidate (get-content first-candidate))
                                       (t
                                        (reinvoke (+ count 1)
                                                  (let ((temp (or current-temperature 1.0)))
                                                    (- 2.0 (/ (- 2.0 temp) 2)))
                                                  current-model))))))
                         (use-weaker-model ()
-                          :report (lambda (s) (format s "Switch from ~a to ~a and retry." current-model +default-model+))
+                          :report (lambda (s)
+                                    (format s "Switch from ~a to ~a and retry." current-model +default-model+))
                           (reinvoke count current-temperature +default-model+))))))))))))
 
 (defun initial-conversation (content-generator)
