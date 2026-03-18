@@ -40,7 +40,7 @@
 (defun gemini-rate-limit ()
   (let iter ((sleep-time (- *next-invoke-gemini-time* (get-universal-time))))
     (when (> sleep-time 0)
-      (report-elapsed-time (format nil "Waiting ~d seconds to respect Gemini API rate limits" sleep-time)
+      (report-elapsed-time (format nil "wait ~d seconds to respect Gemini API rate limits" sleep-time)
         (sleep sleep-time))
       (iter (- *next-invoke-gemini-time* (get-universal-time))))))
 
@@ -48,11 +48,7 @@
   "Invokes the Gemini API with the specified MODEL-ID and PAYLOAD.
    Returns the response from the API as a decoded JSON object.
    This is an internal helper function."
-  (let iter ((sleep-time (- *next-invoke-gemini-time* (get-universal-time))))
-    (when (> sleep-time 0)
-      (report-elapsed-time (format nil "Waiting ~d seconds to respect Gemini API rate limits" sleep-time)
-        (sleep sleep-time))
-      (iter (- *next-invoke-gemini-time* (get-universal-time)))))
+  (gemini-rate-limit)
 
   (report-elapsed-time (format nil "Gemini API model `~a`" model-id)
     (multiple-value-prog1
@@ -61,7 +57,10 @@
          (google:gemini-api-key)
          payload)
       (setq *next-invoke-gemini-time*
-            (+ (get-universal-time) 60.0))))) ;; Enforce 10 second delay between calls
+            (+ (get-universal-time)
+               (cond ((search "flash-lite" model-id) 1)
+                     ((search "flash" model-id) 2)
+                     ((search "pro" model-id) 10)))))))
 
 #||
 (defun classify-prompt (prompt)
@@ -74,19 +73,49 @@
 ||#
 
 (defun file->part (path &key (mime-type (guess-mime-type path)))
-  "Reads a file from PATH, base64 encodes its content, and returns a content PART object
-   suitable for the Gemini API."
-  (when (probe-file path)
-    (ignore-errors
-     (let ((mime-type* (if (string-equal "application/json" mime-type) ;; Gemini bug.
-                           "text/plain"
-                           mime-type)))
-       (if (str:starts-with? "text/" mime-type*)
-           (part (uiop:read-file-string path))
-           (part
-            (object
-             :data (file->blob path)
-             :mime-type mime-type*)))))))
+  "Reads a file or URL from PATH, base64 encodes its content if binary, 
+   and returns a content PART object suitable for the Gemini API. 
+   Logs to *trace-output* on failure."
+  (handler-case
+      (if (str:starts-with? "http" path :ignore-case t)
+          ;; Handle Web URLs
+          (multiple-value-bind (body status headers uri stream)
+              (dex:get path :keep-alive nil)
+            (declare (ignore uri stream))
+            (if (>= status 400)
+                (progn
+                  (format *trace-output* "~&;; WARNING: file->part got HTTP ~d for URL: ~a~%" status path)
+                  nil)
+                (let* ((content-type (or (gethash "content-type" headers) "application/octet-stream"))
+                       (clean-mime (car (str:split ";" content-type))) ;; Strip charset info
+                       (mime-type* (if (string-equal "application/json" clean-mime)
+                                       "text/plain"
+                                       clean-mime)))
+                  (if (str:starts-with? "text/" mime-type*)
+                      ;; It's text, Dexador usually returns a string here
+                      (part (if (stringp body) body (babel:octets-to-string body)))
+                      ;; It's binary, Dexador returns an octet vector
+                      (part
+                       (object
+                        :data (cl-base64:usb8-array-to-base64-string body)
+                        :mime-type mime-type*))))))
+          ;; Handle Local Files
+          (if (not (probe-file path))
+              (progn
+                (format *trace-output* "~&;; WARNING: file->part could not find local file: ~a~%" path)
+                nil)
+              (let ((mime-type* (if (string-equal "application/json" mime-type) ;; Gemini bug.
+                                    "text/plain"
+                                    mime-type)))
+                (if (str:starts-with? "text/" mime-type*)
+                    (part (uiop:read-file-string path))
+                    (part
+                     (object
+                      :data (file->blob path)
+                      :mime-type mime-type*))))))
+    (error (e)
+      (format *trace-output* "~&;; ERROR: file->part failed to process ~a: ~a~%" path e)
+      nil)))
 
 (defun expand-pathname (file)
   (cond ((consp file) (list file))
