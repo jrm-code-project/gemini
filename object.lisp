@@ -570,8 +570,8 @@
   "Initializes the content generator instance."
   (sb-mop:set-funcallable-instance-function
    instance
-   (lambda (prompt &key context files system-instruction)
-     (generate-content instance context prompt files system-instruction))))
+   (lambda (prompt &key context parts files system-instruction)
+     (generate-content instance context prompt parts files system-instruction))))
 
 (defmethod shared-initialize :after ((instance content-generator) slot-names &key config &allow-other-keys)
   "Initializes the content generator instance."

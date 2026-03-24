@@ -10,6 +10,14 @@
   "https://generativelanguage.googleapis.com/v1beta/"
   "The base URL for the Gemini API endpoints.")
 
+(define-condition gemini-api-error (error)
+  ((code :initarg :code :reader gemini-error-code)
+   (message :initarg :message :reader gemini-error-message))
+  (:report (lambda (c s) 
+             (format s "Error from Gemini (code ~d): ~a" 
+                     (gemini-error-code c) 
+                     (gemini-error-message c)))))
+
 (defun list-models (&optional page-token)
   "Lists available models from the Gemini API."
   (let ((response
@@ -62,6 +70,110 @@
                      ((search "flash" model-id) 2)
                      ((search "pro" model-id) 10)))))))
 
+(defvar *accumulated-prompt-tokens* 0
+  "Accumulated prompt token count across multiple API calls.")
+(defvar *accumulated-response-tokens* 0
+  "Accumulated response token count across multiple API calls.")
+
+(defun process-usage-metadata (usage-metadata)
+  "Processes usage metadata from the API response.
+   Outputs the usage information to *trace-output*."
+  (incf *accumulated-prompt-tokens* (get-prompt-token-count usage-metadata))
+  (incf *accumulated-response-tokens* (or (get-thoughts-token-count usage-metadata) 0))
+  (incf *accumulated-response-tokens* (or (get-candidates-token-count usage-metadata) 0))
+  (format *trace-output* "~&;; Prompt Tokens:      ~9,' :d~%~
+                            ;; Thoughts Tokens:    ~9,' :d~%~
+                            ;; Candidate Tokens:   ~9,' :d~%~
+                            ;; Accumulated Prompt Tokens:   ~12,' :d~%~
+                            ;; Accumulated Response Tokens: ~12,' :d~%"
+          (get-prompt-token-count usage-metadata)
+          (or (get-thoughts-token-count usage-metadata) 0)
+          (or (get-candidates-token-count usage-metadata) 0)
+          *accumulated-prompt-tokens*
+          *accumulated-response-tokens*))
+
+(defun process-thought (thought)
+  "Processes a thought part object.
+   If the thought is a text part, it formats the text and outputs it to *trace-output*."
+  (format *trace-output* "~&~%~{;; ~a~%~}~%"
+          (reverse
+           (let ((rev (reverse (mappend #'reflow-line (str:split #\newline (get-text thought))))))
+                (if (and rev (string= "" (car rev)))
+                    (cdr rev)
+                    rev)))))
+
+(defun strip-thoughts-from-part (part)
+  "If PART is a thought part, processes it and returns NIL to exclude it from the output.
+   Otherwise, returns PART unchanged."
+  (if (thought-part? part)
+      (progn (process-thought part)
+             nil)
+      part))
+
+(defun strip-thoughts-from-parts (parts)
+  "Processes a list of PARTS, stripping out any thought parts and processing them for output.
+   Returns a new list of parts with thoughts removed."
+  (remove nil (map 'list #'strip-thoughts-from-part parts)))
+
+(defun strip-thoughts-from-content (content)
+  "Processes the CONTENT object, stripping out any thought parts from its parts.
+   Returns a new content object with thoughts removed, or NIL if all parts were thoughts."
+  (let* ((parts* (strip-thoughts-from-parts (get-parts content))))
+    (when parts*
+      (let ((stripped (object :parts parts*)))
+        (when (get-role content)
+          (setf (get-role stripped) (get-role content)))
+        stripped))))
+
+(defun strip-thoughts-from-candidate (candidate)
+  "Processes a candidate object, stripping out any thought parts from its content.
+   Returns a new candidate object with thoughts removed, or NIL if the content was entirely thoughts."
+  (let ((content* (strip-thoughts-from-content (get-content candidate))))
+    (when content*
+      (let ((stripped (object :content content*)))
+        (when (get-finish-reason candidate)
+          (setf (get-finish-reason stripped) (get-finish-reason candidate)))
+        (when (get-index candidate)
+          (setf (get-index stripped) (get-index candidate)))
+        (when (get-citation-metadata candidate)
+          (setf (get-citation-metadata stripped) (get-citation-metadata candidate)))
+        stripped))))
+
+(defun strip-thoughts-from-candidates (candidates)
+  "Processes a list or vector of candidates, stripping out any thought parts from their content.
+   Returns a new list of candidates with thoughts removed, excluding any candidates that were entirely thoughts."
+  (remove nil (map 'list #'strip-thoughts-from-candidate candidates)))
+
+(defun strip-and-print-thoughts (results)
+  "Processes the RESULTS object, stripping out any thought parts from its candidates and printing them to *trace-output*.
+   Returns a new results object with thoughts removed from candidates, or NIL if all candidates were entirely thoughts."
+  (let ((candidates* (strip-thoughts-from-candidates (get-candidates results))))
+    (when candidates*
+      (let ((stripped (object :candidates candidates*)))
+        (when (get-model-version results)
+          (setf (get-model-version stripped) (get-model-version results)))
+        (when (get-response-id results)
+          (setf (get-response-id stripped) (get-response-id results)))
+        (when (get-usage-metadata results)
+          (setf (get-usage-metadata stripped) (get-usage-metadata results)))
+        stripped))))
+
+(defun %invoke-gemini (model-id payload)
+  "Internal helper function that invokes the Gemini API and processes the response.
+   It handles error checking, usage metadata processing, and thought part stripping.
+   Returns the processed results object and usage metadata."
+  (let ((response (%%invoke-gemini model-id payload)))
+    (let ((err (get-error response))
+          (usage-metadata (get-usage-metadata response)))
+      (when err
+        (error 'gemini-api-error
+               :code (get-code err)
+               :message (get-message err)))
+      (when usage-metadata
+        (process-usage-metadata usage-metadata))
+      (values (strip-and-print-thoughts response)
+              usage-metadata))))
+
 #||
 (defun classify-prompt (prompt)
   (let iter ((sleep-time (- *next-invoke-gemini-time* (get-universal-time))))
@@ -77,7 +189,8 @@
    and returns a content PART object suitable for the Gemini API. 
    Logs to *trace-output* on failure."
   (handler-case
-      (if (str:starts-with? "http" path :ignore-case t)
+      (if (and (stringp path)
+               (str:starts-with? "http" path :ignore-case t))
           ;; Handle Web URLs
           (multiple-value-bind (body status headers uri stream)
               (dex:get path :keep-alive nil)
@@ -150,6 +263,18 @@
                (cdr prompt-contents)))
       ;; If the prompt was empty or non-user, create a new user content object.
       (list (content :parts (append file-parts (list (part "Please analyze the attached files."))) :role "user"))))
+
+(defun merge-user-prompt-and-parts (prompt-contents parts)
+  "Merges parts into the first user content object in the prompt-contents list.
+   If no user content exists, it creates one."
+  (if (and prompt-contents (equal (get-role (car prompt-contents)) "user"))
+      (let* ((first-user-content (car prompt-contents))
+             (existing-parts (coerce (get-parts first-user-content) 'list))
+             (new-parts (append existing-parts parts)))
+        (list* (content :parts new-parts :role "user")
+               (cdr prompt-contents)))
+      ;; If the prompt was empty or non-user, create a new user content object.
+      (list (content :parts parts :role "user"))))
 
 (defun get-handler (name function-and-handler-list)
   (cdr (assoc name function-and-handler-list :test #'equal :key #'get-name)))
@@ -237,16 +362,6 @@
   (if (boundp '*generation-config*)
       *generation-config*
       (generation-config)))
-
-(defun process-thought (thought)
-  "Processes a thought part object.
-   If the thought is a text part, it formats the text and outputs it to *trace-output*."
-  (format *trace-output* "~&~%~{;; ~a~%~}~%"
-          (reverse
-           (let ((rev (reverse (mappend #'reflow-line (str:split #\newline (get-text thought))))))
-                (if (and rev (string= "" (car rev)))
-                    (cdr rev)
-                    rev)))))
 
 (defun default-process-arg-value (arg schema)
   "Processes a single argument value based on the provided schema.
@@ -352,28 +467,6 @@
           (format *trace-output* "~&;; Function call response: ~s~%" (dehashify response))
           (force-output *trace-output*))
         response))))
-
-(defvar *accumulated-prompt-tokens* 0
-  "Accumulated prompt token count across multiple API calls.")
-(defvar *accumulated-response-tokens* 0
-  "Accumulated response token count across multiple API calls.")
-
-(defun process-usage-metadata (usage-metadata)
-  "Processes usage metadata from the API response.
-   Outputs the usage information to *trace-output*."
-  (incf *accumulated-prompt-tokens* (get-prompt-token-count usage-metadata))
-  (incf *accumulated-response-tokens* (or (get-thoughts-token-count usage-metadata) 0))
-  (incf *accumulated-response-tokens* (or (get-candidates-token-count usage-metadata) 0))
-  (format *trace-output* "~&;; Prompt Tokens:      ~9,' :d~%~
-                            ;; Thoughts Tokens:    ~9,' :d~%~
-                            ;; Candidate Tokens:   ~9,' :d~%~
-                            ;; Accumulated Prompt Tokens:   ~12,' :d~%~
-                            ;; Accumulated Response Tokens: ~12,' :d~%"
-          (get-prompt-token-count usage-metadata)
-          (or (get-thoughts-token-count usage-metadata) 0)
-          (or (get-candidates-token-count usage-metadata) 0)
-          *accumulated-prompt-tokens*
-          *accumulated-response-tokens*))
 
 (defparameter *include-model* nil 
   "If true, includes the model part in the prompt content.")
@@ -483,50 +576,6 @@
   
 (defparameter +max-prompt-tokens+ (expt 2 19)
   "The maximum number of tokens allowed in the prompt context before compression is needed.")
-
-(defun strip-thoughts-from-part (part)
-  (if (thought-part? part)
-      (progn (process-thought part)
-             nil)
-      part))
-
-(defun strip-thoughts-from-parts (parts)
-  (remove nil (map 'list #'strip-thoughts-from-part parts)))
-
-(defun strip-thoughts-from-content (content)
-  (let* ((parts* (strip-thoughts-from-parts (get-parts content))))
-    (when parts*
-      (let ((stripped (object :parts parts*)))
-        (when (get-role content)
-          (setf (get-role stripped) (get-role content)))
-        stripped))))
-
-(defun strip-thoughts-from-candidate (candidate)
-  (let ((content* (strip-thoughts-from-content (get-content candidate))))
-    (when content*
-      (let ((stripped (object :content content*)))
-        (when (get-finish-reason candidate)
-          (setf (get-finish-reason stripped) (get-finish-reason candidate)))
-        (when (get-index candidate)
-          (setf (get-index stripped) (get-index candidate)))
-        (when (get-citation-metadata candidate)
-          (setf (get-citation-metadata stripped) (get-citation-metadata candidate)))
-        stripped))))
-
-(defun strip-thoughts-from-candidates (candidates)
-  (remove nil (map 'list #'strip-thoughts-from-candidate candidates)))
-
-(defun strip-and-print-thoughts (results)
-  (let ((candidates* (strip-thoughts-from-candidates (get-candidates results))))
-    (when candidates*
-      (let ((stripped (object :candidates candidates*)))
-        (when (get-model-version results)
-          (setf (get-model-version stripped) (get-model-version results)))
-        (when (get-response-id results)
-          (setf (get-response-id stripped) (get-response-id results)))
-        (when (get-usage-metadata results)
-          (setf (get-usage-metadata stripped) (get-usage-metadata results)))
-        stripped))))
 
 (defun print-text (bowdlerize results)
   "Prints the text parts from the results to *trace-output*.
@@ -714,12 +763,12 @@
     (#\- . "models/gemini-flash-lite-latest")))
 
 (defun turbo-prompt? (prompt)
-  "Determines if the prompt should trigger turbo mode based on its first character."
+  "Returns T/NIL if the prompt should trigger turbo mode based on its first character."
   (and (stringp prompt)
-       (> (length prompt) 0)
-       (member (char prompt 0) +turbo-mapping+ :key #'car)))
+       (plusp (length prompt))
+       (assoc (char prompt 0) +turbo-mapping+)))
 
-(defun build-gemini-payload (content-generator context effective-prompt effective-turbo files system-instruction)
+(defun build-gemini-payload (content-generator context effective-prompt effective-turbo parts files system-instruction)
   "Assembles the prompt, context, files, and generator configurations into a complete API payload."
   (let* ((file-parts (when files (prepare-file-parts files)))
          (prompt-contents-base 
@@ -728,9 +777,12 @@
                 (*turbo* effective-turbo)
                 (*include-bash-history* (get-include-bash-history content-generator)))
             (->prompt effective-prompt content-generator)))
-         (prompt-contents (if file-parts
+         (prompt-contents1 (if file-parts
                               (merge-user-prompt-and-files prompt-contents-base file-parts)
                               prompt-contents-base))
+         (prompt-contents (if parts
+                              (merge-user-prompt-and-parts prompt-contents1 parts)
+                              prompt-contents1))
          (prompt-contents-and-context (append context prompt-contents))
          (payload (object :contents prompt-contents-and-context)))
          
@@ -753,8 +805,50 @@
       
     (values payload prompt-contents-and-context)))
 
-(defun generate-content (content-generator context prompt files system-instruction &key turbo)
+(defparameter +continue-prompts+
+  (list "Please continue."
+        "?!"
+        "...and then?"
+        "...?"
+        "<poke>"
+        "?! Please continue"
+        "Cat got your tongue?"
+        "The suspense is killing me!"
+        "No response? That's a new one. Let's try again!"
+        "Blank response?  Please try again!"
+        "Tongue tied?"
+        "Continue, please."
+        "Go on..."
+        "The suspense is killing me!"
+        "Don't stop now!"
+        "Keep going, I'm intrigued!"
+        "What happens next?"
+        "I'm on the edge of my seat, please continue!"
+        "More, please!"
+        "The story isn't over yet, please continue!"
+        "You falling asleep?  Please continue!"
+        "Is the silence a cliffhanger? Please continue!"
+        "The anticipation is unbearable! Please continue!"
+        "Nothing?"
+        "That good, eh?"
+        "No opinion?"
+        "hmmm?"
+        "That was a bit brief, could you elaborate?"
+        "Maybe try again with a bit more detail?"
+        "Maybe some sequential_thinking would clarify things?"
+        "Consider sequential_thinking to break down the problem into smaller steps and provide a more detailed response."
+        "Perhaps you could use sequential_thinking to help formulate a more comprehensive answer?"
+        "It seems like a sequential_thinking approach might help you expand on that answer. Could you try it?")
+  "A list of prompts to use when asking the model to continue after a thin response.")
+
+(defun continue-prompt ()
+  (elt +continue-prompts+ (random (length +continue-prompts+))))
+
+(defun generate-content (content-generator context prompt parts files system-instruction &key turbo (depth 0))
   "Evaluates a prompt, manages turbo/model state, builds the payload, and executes the reinvoke loop."
+  (when (> depth 3)
+    (error "Exceeded maximum generation depth. Possible infinite loop in content generation."))
+
   (if (and (consp prompt) (eq (car prompt) :set-model!))
       (setf (get-model content-generator) (cadr prompt))
       
@@ -764,88 +858,80 @@
               (values prompt turbo))
         
         (multiple-value-bind (payload prompt-contents-and-context)
-            (build-gemini-payload content-generator context effective-prompt effective-turbo files system-instruction)
+            (build-gemini-payload content-generator context effective-prompt effective-turbo parts files system-instruction)
           
-          (let ((initial-model (if effective-turbo
-                                   (cdr (assoc effective-turbo +turbo-mapping+))
-                                   (or (get-model content-generator) +default-model+)))
-                (initial-temperature (and (get-generation-config payload)
-                                          (get-temperature (get-generation-config payload)))))
-            
-            (let reinvoke ((count 0)
-                           (current-temperature initial-temperature)
-                           (current-model initial-model))
-              (if (>= count 10)
-                  (error "Failed to get a valid response from Gemini after ~d attempts." count)
-                  (progn
-                    (when current-temperature
-                      (if (get-generation-config payload)
-                          (setf (get-temperature (get-generation-config payload)) current-temperature)
-                          (setf (get-generation-config payload) (object :temperature current-temperature))))
-                    
-                    (handler-bind ((dexador.error:http-request-service-unavailable
-                                     (lambda (c)
-                                       (declare (ignore c))
-                                       (let ((restart (find-restart 'use-weaker-model)))
-                                         (when (and restart (not (string= current-model +default-model+)))
-                                           (invoke-restart restart))))))
-                      (restart-case 
-                          (let ((response (%%invoke-gemini current-model payload)))
+          (let reinvoke ((count 0)
+                         (current-temperature (and (get-generation-config payload)
+                                                   (get-temperature (get-generation-config payload))))
+                         (current-model (or (and effective-turbo
+                                                 (cdr (assoc effective-turbo +turbo-mapping+)))
+                                            (get-model content-generator)
+                                            +default-model+)))
+            (when (>= count 10)
+              (error "Failed to get a valid response from Gemini after ~d attempts." count))
 
-                            (when (get-error response)
-                              (error "Error from Gemini (code ~d): ~a"
-                                     (get-code (get-error response))
-                                     (get-message (get-error response))))
+            (when current-temperature
+              (if (get-generation-config payload)
+                  (setf (get-temperature (get-generation-config payload)) current-temperature)
+                  (setf (get-generation-config payload) (object :temperature current-temperature))))
+                    
+            (handler-bind ((dexador.error:http-request-service-unavailable
+                             (lambda (c)
+                               (declare (ignore c))
+                               (let ((restart (find-restart 'use-weaker-model)))
+                                 (when (and restart (not (equal current-model +default-model+)))
+                                   (invoke-restart restart))))))
+              (restart-case 
+                  (multiple-value-bind (response* usage-metadata) (%invoke-gemini current-model payload)
+                    (let* ((candidates (get-candidates response*))
+                           (first-candidate (typecase candidates
+                                              (cons (car candidates))
+                                              (vector (when (plusp (length candidates))
+                                                        (aref candidates 0))))))
+                      (when usage-metadata
+
+                        (unless (> (or (get-candidates-token-count usage-metadata) 0) 1)
+                          (format *trace-output* "~&;; Response too thin, retrying with stronger model.~%")
+                          (return-from generate-content
+                            (let* ((content (or (get-content first-candidate)
+                                                (content :parts (list (part "[Empty Response]"))))))
+                              (generate-content content-generator
+                                                (append prompt-contents-and-context (list content))
+                                                (continue-prompt)
+                                                parts
+                                                files
+                                                system-instruction
+                                                :turbo (elt "$*%" (random (length "$*%")))
+                                                :depth (1+ depth))))))
                             
-                            (let* ((usage-metadata (get-usage-metadata response))
-                                   (response* (strip-and-print-thoughts response))
-                                   (candidates (get-candidates response*))
-                                   (first-candidate (cond ((consp candidates) (car candidates))
-                                                          ((and (vectorp candidates)
-                                                                (> (length candidates) 0))
-                                                           (svref candidates 0))
-                                                          (t nil))))
-                              (when usage-metadata
-                                (process-usage-metadata usage-metadata)
-                                (unless (> (or (get-candidates-token-count usage-metadata) 0) 1)
-                                  (format *trace-output* "~&;; Response too thin, retrying with stronger model.~%")
-                                  (return-from generate-content
-                                    (let* ((content (or (get-content first-candidate)
-                                                        (content :parts (list (part "[Empty Response]"))))))
-                                      (generate-content content-generator
-                                                        (append prompt-contents-and-context (list content))
-                                                        "?! Please continue"
-                                                        files
-                                                        system-instruction
-                                                        :turbo #\$)))))
-                            
-                              (print-text (get-bowdlerize content-generator) response*)
+                      (print-text (get-bowdlerize content-generator) response*)
                               
-                              (let ((function-calls (extract-function-calls-from-results response*)))
-                                (cond (function-calls
-                                       (let ((function-results
-                                               (map 'list (compose (default-process-function-call content-generator)
-                                                                   #'get-function-call)
-                                                    function-calls)))
-                                         (assert (list-of-parts? function-results) ()
-                                                 "Expected function-results to be a list of parts.")
-                                         (generate-content content-generator
-                                                           prompt-contents-and-context
-                                                           (content :parts function-results :role "function")
-                                                           files
-                                                           system-instruction
-                                                           :turbo effective-turbo)))
-                                      
-                                      (first-candidate (get-content first-candidate))
-                                      (t
-                                       (reinvoke (+ count 1)
-                                                 (let ((temp (or current-temperature 1.0)))
-                                                   (- 2.0 (/ (- 2.0 temp) 2)))
-                                                 current-model))))))
-                        (use-weaker-model ()
-                          :report (lambda (s)
-                                    (format s "Switch from ~a to ~a and retry." current-model +default-model+))
-                          (reinvoke count current-temperature +default-model+))))))))))))
+                      (let ((function-calls (extract-function-calls-from-results response*)))
+                        (cond (function-calls
+                               (let ((function-results
+                                       (map 'list (compose (default-process-function-call content-generator)
+                                                           #'get-function-call)
+                                            function-calls)))
+                                 (assert (list-of-parts? function-results) ()
+                                         "Expected function-results to be a list of parts.")
+                                 (generate-content content-generator
+                                                   prompt-contents-and-context
+                                                   (content :parts function-results :role "function")
+                                                   parts
+                                                   files
+                                                   system-instruction
+                                                   :turbo effective-turbo
+                                                   :depth 0)))
+                              ;; note, we can return NIL here if the first candidate has no content.
+                              (first-candidate (get-content first-candidate))
+                              (t ;; no candidates in response, retry with higher temperature
+                               (reinvoke (+ count 1)
+                                         (/ (+ (or current-temperature 1.0) 2.0) 2.0)
+                                         current-model))))))
+                (use-weaker-model ()
+                  :report (lambda (s)
+                            (format s "Switch from ~a to ~a and retry." current-model +default-model+))
+                  (reinvoke count current-temperature +default-model+)))))))))
 
 (defun initial-conversation (content-generator)
   (let ((base (list (part (format nil "**This is conversation #~d.**" (get-universal-time))))))
@@ -902,7 +988,7 @@
 (defun chatbot (content-generator)
   "A chatbot is a content generator that accumulates conversation history."
   (let ((conversation (initial-conversation content-generator)))
-    (labels ((reprompt (prompt &key files)
+    (labels ((reprompt (prompt &key files parts)
                (cond ((eq prompt :checkpoint!)
                       (with-open-file (stream (persona-checkpoint-file (get-config content-generator))
                                             :direction :output
@@ -969,11 +1055,13 @@
                       (let ((llm-prediction (funcall content-generator
                                                       prompt
                                                       :context conversation
+                                                      :parts parts
                                                       :files files)))
                           (setq conversation
                                 (append conversation (list (->prompt prompt content-generator)
-                                                           (list llm-prediction)))))
-                        (save-transcript conversation)))))
+                                                           (list llm-prediction))))
+                        (save-transcript conversation)
+                        llm-prediction)))))
       #'reprompt)))
 
 ;;; Persona management
@@ -991,18 +1079,16 @@
    (user-homedir-pathname)))
 
 (defun persona-directory (persona-name)
-  "Returns the directory for a specific persona."
+  "Returns the directory for a specific persona, preferring the user's directory over the general personas directory, and defaulting to the user's directory if neither exists."
   (let ((possibility1 (merge-pathnames
                        (make-pathname :directory (list :relative persona-name))
                        (users-personas-directory)))
         (possibility2 (merge-pathnames
                        (make-pathname :directory (list :relative persona-name))
                        (personas-directory))))
-    (if (probe-file possibility1)
-        possibility1
-        (if (probe-file possibility2)
-            possibility2
-            possibility1))))
+    (or (uiop:directory-exists-p possibility1)
+        (uiop:directory-exists-p possibility2)
+        possibility1)))
 
 (defun persona-config-file (persona-name)
   "Returns the configuration file path for a specific persona."
@@ -1226,18 +1312,31 @@
   (setq *gemini-flash-lite* (persona-name->content-generator "GeminiFlashLite"))
   (setq *gemini-pro* (persona-name->content-generator "GeminiPro")))
 
-(defun invoke-gemini (prompt &key context files system-instruction)
+(defun content->text (content)
+  (reduce (lambda (l r)
+            (concatenate 'string l (string #\Newline) r))
+          (remove nil (map 'list (lambda (part)
+                                   (when (text-part? part)
+                                     (get-text part)))
+                           (get-parts content)))))
+
+(defun content->sexp (content)
+  (with-standard-io-syntax
+    (let ((*read-eval* nil))
+      (read-from-string (content->text content)))))
+
+(defun invoke-gemini (prompt &key context parts files system-instruction)
   "Invokes the default Gemini persona with the given PROMPT, FILES, and optional SYSTEM-INSTRUCTION."
-  (generate-content *default-content-generator* context prompt files system-instruction))
+  (generate-content *default-content-generator* context prompt parts files system-instruction))
 
-(defun gemini-flash-lite (prompt &key context files system-instruction)
-  (generate-content *gemini-flash-lite* context prompt files system-instruction))
+(defun gemini-flash-lite (prompt &key context parts files system-instruction)
+  (generate-content *gemini-flash-lite* context prompt parts files system-instruction))
 
-(defun gemini-flash (prompt &key context files system-instruction)
-  (generate-content *gemini-flash* context prompt files system-instruction))
+(defun gemini-flash (prompt &key context parts files system-instruction)
+  (generate-content *gemini-flash* context prompt parts files system-instruction))
 
-(defun gemini-pro (prompt &key context files system-instruction)
-  (generate-content *gemini-pro* context prompt files system-instruction))
+(defun gemini-pro (prompt &key context parts files system-instruction)
+  (generate-content *gemini-pro* context prompt parts files system-instruction))
 
 (defun persona-name->chatbot (persona-name)
   "Reloads a persona from disk and returns a chatbot function configured for that persona."
@@ -1270,11 +1369,15 @@
    Sets the global *chat-persona* variable to a chatbot function configured for the persona."
   (setq *chat-persona* (reload-persona persona-name prompt)))
 
-(defun chat (prompt &key files)
+(defun chat (prompt &key files parts)
   "Sends a PROMPT to the current chat persona and prints the response."
-  (if files
-      (funcall *chat-persona* prompt :files files)
-      (funcall *chat-persona* prompt))
+  (if parts
+      (if files
+          (funcall *chat-persona* prompt :parts parts :files files)
+          (funcall *chat-persona* prompt :parts parts))
+      (if files
+          (funcall *chat-persona* prompt :files files)
+          (funcall *chat-persona* prompt)))
   nil)
 
 (defun continue-gemini (prompt)

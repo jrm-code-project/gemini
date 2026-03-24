@@ -133,8 +133,21 @@
     "  * If improvements can be made, give up to three concrete, actionable suggestions for improvement."
     "  * For each suggestion, indicate whether it is a critical improvement, major improvement, minor improvement, merely nice to have, or barely worth mentioning."
     "  * For each suggestion, describe your reasoning."
-    "  * If the form is error free and does not need improvement, say so."))
+    "  * If the form is error free and does not need improvement, say so."
+    "  * Do not mention the `-p` (or `p`) suffix if the predicate has a Scheme-style `?` suffix."
+    "  * Assume that the Scheme-style named `let` syntax is correctly implemented and is available."
+    ))
   "LLM prompt detailing the analysis criteria and reporting format for a single Common Lisp top-level form.")
+
+(defun analyze-lisp (form &key package)
+  (declare (ignore package))
+  (gemini-pro
+   (list
+    "The following is a Common Lisp top-level form."
+    (format nil "```lisp~%~a~%```" form)
+    +analyze-form-prompt+)
+   :system-instruction +analyze-file-system-instruction+))
+
 
 (defparameter +analyze-file-system-instruction+
   (str:join #\newline
