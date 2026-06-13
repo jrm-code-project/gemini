@@ -18,6 +18,7 @@
                "jsonx"
                "named-let"
                "promise"
+               "sb-introspect"
                "series"
                "str"
                "trivial-backtrace"
@@ -83,6 +84,7 @@
                (:file "object"    :depends-on ("misc" "package" "vars"))
                (:file "package")
                (:file "parse"     :depends-on ("gemini" "misc" "object" "package" "vars"))
+               (:file "predator"  :depends-on ("package"))
                (:file "shell-tools" :depends-on ("package" "vars"))
                (:file "specimen"  :depends-on ("gemini" "misc" "object" "package" "vars"))
                (:file "system"    :depends-on ("gemini" "misc" "object" "package" "vars"))
