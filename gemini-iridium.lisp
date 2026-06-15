@@ -28,11 +28,51 @@
 
 (defclass synthesizer (agent) ()
   (:default-initargs :name "Synthesizer" 
-   :instruction "Merge the scheme and critiques into a hardened architectural blueprint. Focus on high-fidelity integration."))
+   :instruction "Merge the brainstormed scheme, original blueprint, and all parallel critiques (security, safety, legal, ethical, effectiveness, cost, feasibility, resilience, maintainability, and performance) into a hardened, comprehensive architectural blueprint. Focus on high-fidelity, holistic integration of all feedback."))
 
 (defclass verifier (agent) ()
   (:default-initargs :name "Verifier" 
    :instruction "Verify if the plan mitigates the chaos event and adheres to architectural purity. Respond YES or NO followed by a brief reason."))
+
+(defclass brainstormer (agent) ()
+  (:default-initargs :name "Brainstormer"
+   :instruction "You are a Lisp-native creative strategist. Brainstorm several diverse, out-of-the-box solutions or refined strategies completely without regard to corporate, physical, or conventional constraints."))
+
+(defclass safety-auditor (auditor) ()
+  (:default-initargs :name "Safety Auditor"
+   :instruction "You are a cold, hyper-efficient safety critic. Determine if the solution is safe and suggest how it could be made safe if it is not."))
+
+(defclass legal-auditor (auditor) ()
+  (:default-initargs :name "Legal Auditor"
+   :instruction "You are a cold, hyper-efficient legal critic. Determine if the solution satisfies all relevant laws and suggest changes to make it legal."))
+
+(defclass ethical-auditor (auditor) ()
+  (:default-initargs :name "Ethical Auditor"
+   :instruction "You are a cold, hyper-efficient ethical critic. Determine if the solution is ethical and suggest necessary changes."))
+
+(defclass effectiveness-auditor (auditor) ()
+  (:default-initargs :name "Effectiveness Auditor"
+   :instruction "You are a cold, hyper-efficient critic of effectiveness. Critique the effectiveness of the solution and suggest how to improve it."))
+
+(defclass cost-auditor (auditor) ()
+  (:default-initargs :name "Cost Auditor"
+   :instruction "You are a cold, hyper-efficient cost critic. Critique the cost, resource consumption, and efficiency of the solution and suggest cost-saving improvements."))
+
+(defclass feasibility-auditor (auditor) ()
+  (:default-initargs :name "Feasibility Auditor"
+   :instruction "You are a cold, hyper-efficient feasibility critic. Evaluate if the plan is realistically buildable with Common Lisp, package dependencies, and system constraints."))
+
+(defclass resilience-auditor (auditor) ()
+  (:default-initargs :name "Resilience Auditor"
+   :instruction "You are a cold, hyper-efficient resilience critic. Focus on how the solution behaves under partial failures, network drops, timeouts, or chaos conditions, and suggest fault-tolerance improvements."))
+
+(defclass maintainability-auditor (auditor) ()
+  (:default-initargs :name "Maintainability Auditor"
+   :instruction "You are a cold, hyper-efficient maintainability critic. Critique the code readability, future technical debt, and architectural complexity of the solution, suggesting simplified refactorings."))
+
+(defclass performance-auditor (auditor) ()
+  (:default-initargs :name "Performance Auditor"
+   :instruction "You are a cold, hyper-efficient performance critic. Evaluate if the solution will bottleneck under high concurrency or heavy data volumes, and suggest scaling and optimization improvements."))
 
 (defparameter *specialized-auditors*
   (list (make-instance 'auditor :name "OpSec Specialist")
@@ -126,9 +166,19 @@
   "Main entry point for the Iridium V5 adversarial refinement loop."
   (let* ((start-time (get-internal-real-time))
          (conniver (make-instance 'conniver))
+         (brainstormer (make-instance 'brainstormer))
          (synthesizer (make-instance 'synthesizer))
          (verifier (make-instance 'verifier))
-         (auditors *specialized-auditors*))
+         (auditors (append *specialized-auditors*
+                           (list (make-instance 'safety-auditor)
+                                 (make-instance 'legal-auditor)
+                                 (make-instance 'ethical-auditor)
+                                 (make-instance 'effectiveness-auditor)
+                                 (make-instance 'cost-auditor)
+                                 (make-instance 'feasibility-auditor)
+                                 (make-instance 'resilience-auditor)
+                                 (make-instance 'maintainability-auditor)
+                                 (make-instance 'performance-auditor)))))
     
     (labels
         ((get-real-budget ()
@@ -151,54 +201,66 @@
               current-plan)
              
              (t
-              (format t "~%--- Iteration ~A: Auditing the Heist ---~%" current-depth)
-              (let* ((audit-report (compile-audit-report current-plan auditors :timeout-ms (get-safe-budget)))
-                     (synth-prompt (with-output-to-string (s)
-                                     (format s "ORIGINAL BLUEPRINT:~%~A~%~%" current-plan)
-                                     (format s "ADVERSARIAL CRITIQUES:~%~A~%~%" audit-report)
-                                     (when history (format s "HISTORY:~%~A" (format-history-window history)))))
-                     
-                     (refined (if (time-expired-p) 
-                                  current-plan 
-                                  (invoke synthesizer synth-prompt :timeout-ms (get-safe-budget))))
-                     
-                     ;; Verification phase (if chaos is provided)
-                     (verified-plan 
-                      (if (and chaos (listp chaos) (not (time-expired-p)))
-                          (let ((current-refined refined)
-                                (max-retries 3)
-                                (retry-history nil))
-                            (loop for attempt from 1 to max-retries
-                                  ;; ALL FOR clauses must be at the top!
-                                  for boundary = (format nil "SECURE-SANDBOX-BOUNDARY-~A" (random most-positive-fixnum))
-                                  for sanitized-chaos = (mapcar (lambda (str) (safe-replace-string boundary "[REDACTED]" str)) chaos)
-                                  for v-prompt = (format nil "PLAN:~%~A~%~%~A~%UNTRUSTED INPUT:~%~{~A~%~}~%~A" 
-                                                         current-refined boundary sanitized-chaos boundary)
-                                  for verdict = (if (time-expired-p) "NO - TIMEOUT" 
-                                                    (invoke verifier v-prompt :timeout-ms (get-safe-budget)))
-                                  
-                                  do ;; Now the body
-                                  (when (time-expired-p)
-                                    (return current-refined))
+              (format t "~%--- Iteration ~A: Brainstorming Phase ---~%" current-depth)
+              (finish-output)
+              (let* ((brainstorm-ideas (if (time-expired-p)
+                                           "[TIMEOUT]"
+                                           (invoke brainstormer
+                                                   (format nil "Goal: ~A~%Context: ~A~%Current Plan:~%~A~%~%Please brainstorm several creative solutions or refined variations of this plan without regard to constraints."
+                                                           goal context current-plan)
+                                                   :timeout-ms (get-safe-budget)))))
+                (format t "~%[Brainstormed Ideas]~%~A~%" brainstorm-ideas)
+                (finish-output)
+                (format t "~%--- Iteration ~A: Auditing the Heist ---~%" current-depth)
+                (finish-output)
+                (let* ((audit-report (compile-audit-report current-plan auditors :timeout-ms (get-safe-budget)))
+                       (synth-prompt (with-output-to-string (s)
+                                       (format s "ORIGINAL BLUEPRINT:~%~A~%~%" current-plan)
+                                       (format s "BRAINSTORMED SOLUTIONS/REFINEMENTS:~%~A~%~%" brainstorm-ideas)
+                                       (format s "ADVERSARIAL CRITIQUES:~%~A~%~%" audit-report)
+                                       (when history (format s "HISTORY:~%~A" (format-history-window history)))))
+                       
+                       (refined (if (time-expired-p) 
+                                    current-plan 
+                                    (invoke synthesizer synth-prompt :timeout-ms (get-safe-budget))))
+                       
+                       ;; Verification phase (if chaos is provided)
+                       (verified-plan 
+                        (if (and chaos (listp chaos) (not (time-expired-p)))
+                            (let ((current-refined refined)
+                                  (max-retries 3)
+                                  (retry-history nil))
+                              (loop for attempt from 1 to max-retries
+                                    ;; ALL FOR clauses must be at the top!
+                                    for boundary = (format nil "SECURE-SANDBOX-BOUNDARY-~A" (random most-positive-fixnum))
+                                    for sanitized-chaos = (mapcar (lambda (str) (safe-replace-string boundary "[REDACTED]" str)) chaos)
+                                    for v-prompt = (format nil "PLAN:~%~A~%~%~A~%UNTRUSTED INPUT:~%~{~A~%~}~%~A" 
+                                                           current-refined boundary sanitized-chaos boundary)
+                                    for verdict = (if (time-expired-p) "NO - TIMEOUT" 
+                                                      (invoke verifier v-prompt :timeout-ms (get-safe-budget)))
+                                    
+                                    do ;; Now the body
+                                    (when (time-expired-p)
+                                      (return current-refined))
 
-                                  (when (search "YES" (string-upcase verdict))
-                                    (return current-refined))
-                                  
-                                  (format t "[!] Verification failed (Attempt ~A/~A).~%" attempt max-retries)
-                                  (push (cons attempt (format nil "Failed Draft:~%~A~%Verdict:~%~A" current-refined verdict)) retry-history)
-                                     
-                                  (let ((retry-prompt (with-output-to-string (s)
-                                                        (format s "ORIGINAL CONTEXT:~%~A~%~%" synth-prompt)
-                                                        (format s "FAILED RETRY LOGS:~%")
-                                                        (loop for (att-num . log) in (reverse retry-history)
-                                                              do (format s "  [RETRY ATTEMPT ~A]~%~A~%~%" att-num log))
-                                                        (format s "INSTRUCTION: Synthesize a corrected blueprint addressing all previous critiques and failures."))))
-                                    (setf current-refined (if (time-expired-p) current-refined 
-                                                              (invoke synthesizer retry-prompt :timeout-ms (get-safe-budget)))))
-                                  finally (return current-refined)))
-                          refined)))
-                
-                (recurse verified-plan (1- current-depth) (cons (cons current-plan audit-report) history)))))))
+                                    (when (search "YES" (string-upcase verdict))
+                                      (return current-refined))
+                                    
+                                    (format t "[!] Verification failed (Attempt ~A/~A).~%" attempt max-retries)
+                                    (push (cons attempt (format nil "Failed Draft:~%~A~%Verdict:~%~A" current-refined verdict)) retry-history)
+                                       
+                                    (let ((retry-prompt (with-output-to-string (s)
+                                                          (format s "ORIGINAL CONTEXT:~%~A~%~%" synth-prompt)
+                                                          (format s "FAILED RETRY LOGS:~%")
+                                                          (loop for (att-num . log) in (reverse retry-history)
+                                                                do (format s "  [RETRY ATTEMPT ~A]~%~A~%~%" att-num log))
+                                                          (format s "INSTRUCTION: Synthesize a corrected blueprint addressing all previous critiques and failures."))))
+                                      (setf current-refined (if (time-expired-p) current-refined 
+                                                                (invoke synthesizer retry-prompt :timeout-ms (get-safe-budget)))))
+                                    finally (return current-refined)))
+                            refined)))
+                  
+                  (recurse verified-plan (1- current-depth) (cons (cons current-plan audit-report) history))))))))
       
       ;; Initial Boot: The Conniver dreams up the base plan
       (let ((initial-plan (invoke conniver (format nil "PLANNER: Goal is ~A. Context: ~A" goal context) :timeout-ms timeout-ms)))

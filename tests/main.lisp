@@ -95,7 +95,9 @@
 
 (test predator-safe-whitelist-symbols
   "Test that the newly added safe whitelist symbols parse correctly."
-  (dolist (sym-str '("LET*" "CONS" "CAR" "CDR" "LIST" "APPEND" "EQUAL" "PROGN" "COND" "SETQ" "SETF" "FORMAT" "PRINT"))
+  (dolist (sym-str '("LET*" "CONS" "CAR" "CDR" "LIST" "APPEND" "EQUAL" "PROGN" "COND" "SETQ" "SETF" "FORMAT" "PRINT"
+                     "PI" "WHEN" "UNLESS" "DESTRUCTURING-BIND" "DEFMACRO" "MAPCAR" "REDUCE" "SIN" "COS" "MAKE-ARRAY"
+                     "GETHASH" "UNWIND-PROTECT" "DEFCLASS" "MAKE-INSTANCE" "SLOT-VALUE" "GENSYM"))
     (with-binary-stream-from-string (stream sym-str)
       (is (eq (find-symbol sym-str "GEMINI") (predator-read stream))))))
 
@@ -546,21 +548,49 @@
 (test scheme-and-critique-mocked-flow
   "Test adversarial loop recursion depth and chaos verification flow using mock models."
   (let* ((conniver-called 0)
+         (brainstormer-called 0)
          (synth-called 0)
          (verifier-called 0)
          (auditor-called 0)
+         (safety-called 0)
+         (legal-called 0)
+         (ethical-called 0)
+         (effectiveness-called 0)
+         (cost-called 0)
+         (feasibility-called 0)
+         (resilience-called 0)
+         (maintainability-called 0)
+         (performance-called 0)
+         (security-called 0)
          ;; Mock generators
          (mock-conniver-model (lambda (parts)
                                 (declare (ignore parts))
                                 (incf conniver-called)
                                 (gemini::content :parts (list (part "base plan")) :role "model")))
+         (mock-brainstormer-model (lambda (parts)
+                                    (declare (ignore parts))
+                                    (incf brainstormer-called)
+                                    (gemini::content :parts (list (part "brainstormed plan solutions")) :role "model")))
          (mock-synth-model (lambda (parts)
                              (declare (ignore parts))
                              (incf synth-called)
                              (gemini::content :parts (list (part "refined plan")) :role "model")))
-         (mock-auditor-model (lambda (parts &key &allow-other-keys)
+         (mock-auditor-model (lambda (parts &key system-instruction &allow-other-keys)
                                (declare (ignore parts))
                                (incf auditor-called)
+                               (when system-instruction
+                                 (let ((instr-down (string-downcase system-instruction)))
+                                   (cond
+                                     ((search "safety" instr-down) (incf safety-called))
+                                     ((search "legal" instr-down) (incf legal-called))
+                                     ((search "ethical" instr-down) (incf ethical-called))
+                                     ((search "effectiveness" instr-down) (incf effectiveness-called))
+                                     ((search "cost" instr-down) (incf cost-called))
+                                     ((search "feasibility" instr-down) (incf feasibility-called))
+                                     ((search "resilience" instr-down) (incf resilience-called))
+                                     ((search "maintainability" instr-down) (incf maintainability-called))
+                                     ((search "performance" instr-down) (incf performance-called))
+                                     (t (incf security-called)))))
                                (gemini::content :parts (list (part "critique")) :role "model")))
          (mock-verifier-model (lambda (parts)
                                 (declare (ignore parts))
@@ -573,9 +603,11 @@
           (orig-auditors gemini::*specialized-auditors*))
       (unwind-protect
            (progn
-             (setf gemini::*gemini-flash* (lambda (parts &key &allow-other-keys)
+             (setf gemini::*gemini-flash* (lambda (parts &key system-instruction &allow-other-keys)
                                             (let ((prompt-str (get-text (car parts))))
                                               (cond
+                                                ((and system-instruction (search "Brainstorm" system-instruction))
+                                                 (funcall mock-brainstormer-model parts))
                                                 ((search "PLANNER:" prompt-str)
                                                  (funcall mock-conniver-model parts))
                                                 ((search "ORIGINAL PLAN" prompt-str)
@@ -595,12 +627,25 @@
                (is (equal "refined plan" final-plan))
                ;; Verify invocation counts
                (is (= 1 conniver-called))
+               ;; brainstormer should be called 2 times (2 iterations of depth 2)
+               (is (= 2 brainstormer-called))
                ;; verifier should be called four times (2 iterations, NO then YES each)
                (is (= 4 verifier-called))
                ;; synth called at least twice
                (is (>= synth-called 2))
-               ;; auditor called 2 times (one per iteration of depth 2)
-               (is (= 2 auditor-called))))
+               ;; auditor called 20 times total (10 auditors * 2 iterations)
+               (is (= 20 auditor-called))
+               ;; Check the distribution of specialized critiques
+               (is (= 2 security-called))
+               (is (= 2 safety-called))
+               (is (= 2 legal-called))
+               (is (= 2 ethical-called))
+               (is (= 2 effectiveness-called))
+               (is (= 2 cost-called))
+               (is (= 2 feasibility-called))
+               (is (= 2 resilience-called))
+               (is (= 2 maintainability-called))
+               (is (= 2 performance-called))))
         ;; Restore original values
         (setf gemini::*gemini-flash* orig-flash)
         (setf gemini::*gemini-uncensored* orig-uncensored)
