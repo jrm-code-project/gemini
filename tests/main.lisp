@@ -450,6 +450,10 @@
   (is (< (abs (- 0.85 (gemini::parse-float-safely "abc0.85xyz"))) 0.001))
   (is (< (abs (- 123.456 (gemini::parse-float-safely "  123.456  "))) 0.001)))
 
+(test content-to-text-null-handling
+  "Test that content->text safely returns an empty string when the input content is NIL."
+  (is (equal "" (gemini::content->text nil))))
+
 ;;; Test suite for gemini-iridium functions
 (def-suite gemini-iridium-tests
   :description "Tests for gemini-iridium functions."

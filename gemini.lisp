@@ -24,12 +24,14 @@
   )
 
 (defun content->text (content)
-  (reduce (lambda (l r)
-            (concatenate 'string l (string #\Newline) r))
-          (remove nil (map 'list (lambda (part)
-                                   (when (text-part? part)
-                                     (get-text part)))
-                           (get-parts content)))))
+  (if (null content)
+      ""
+      (reduce (lambda (l r)
+                (concatenate 'string l (string #\Newline) r))
+              (remove nil (map 'list (lambda (part)
+                                       (when (text-part? part)
+                                         (get-text part)))
+                               (get-parts content))))))
 
 (defun content->sexp (content)
   (with-standard-io-syntax
