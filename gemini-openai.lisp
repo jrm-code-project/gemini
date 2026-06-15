@@ -11,8 +11,8 @@
                                      ;; Even local runners sometimes want a dummy key
                                      ("Authorization" . "Bearer lm-studio"))
                           :content (cl-json:encode-json-to-string payload)
-                          :read-timeout read-timeout
-                          :connect-timeout connect-timeout))))
+                          :read-timeout (or read-timeout 300)
+                          :connect-timeout (or connect-timeout 60)))))
     response))
 
 (defun parse-openai-response (json-string)

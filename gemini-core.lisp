@@ -69,12 +69,13 @@
   "Internal helper with staggered rate limiting."
   (gemini-rate-limit :timeout-ms total-timeout-ms :model-id model-id)
   (report-elapsed-time (format nil "Gemini API model `~a`" model-id)
-    (google:google-post
-     (concatenate 'string +gemini-api-base-url+ model-id ":generateContent")
-     (google:gemini-api-key)
-     payload
-     :read-timeout read-timeout
-     :connect-timeout connect-timeout)))
+    (sb-ext:with-timeout (or read-timeout 300)
+      (google:google-post
+       (concatenate 'string +gemini-api-base-url+ model-id ":generateContent")
+       (google:gemini-api-key)
+       payload
+       :read-timeout (or read-timeout 60)
+       :connect-timeout (or connect-timeout 300)))))
 
 (defvar *gemini-token-lock* (sb-thread:make-mutex :name "gemini-token-lock"))
 
@@ -128,8 +129,8 @@
                             (build-openai-payload model-id payload)
                             :url (or (get-url content-generator)
                                      "http://localhost:1234/v1/chat/completions")
-                            :read-timeout read-timeout
-                            :connect-timeout connect-timeout))
+                            :read-timeout (or read-timeout 300)
+                            :connect-timeout (or connect-timeout 30)))
         (when usage-metadata
           (process-usage-metadata usage-metadata))
         (values response usage-metadata))))
@@ -785,7 +786,9 @@
                                          files
                                          system-instruction
                                          turbo
-                                         (1+ depth)))))
+                                         (1+ depth)
+                                         :read-timeout read-timeout
+                                         :connect-timeout connect-timeout))))
 
 
                 (unless (> (or (get-candidates-token-count usage-metadata) 0) 0)
@@ -801,7 +804,9 @@
                                          files
                                          system-instruction
                                          (elt "$*%" (random (length "$*%")))
-                                         (1+ depth))))))
+                                         (1+ depth)
+                                         :read-timeout read-timeout
+                                         :connect-timeout connect-timeout)))))
                             
               (when *echo-result*
                 (print-text (get-bowdlerize content-generator) response*))
@@ -826,7 +831,10 @@
                                               files
                                               system-instruction
                                               turbo
-                                              (1+ depth)))))
+                                              (1+ depth)
+                                              :read-timeout read-timeout
+                                              :connect-timeout connect-timeout
+                                              ))))
                       ;; note, we can return NIL here if the first candidate has no content.
                       (first-candidate (get-content first-candidate))))))
         (use-weaker-model ()

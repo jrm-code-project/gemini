@@ -65,7 +65,7 @@
         (conversational-agent-conversation-history instance) (list (conversational-agent-conversation instance))))
 
 (defmethod invoke ((self conversational-agent) prompt &key files parts model-override timeout-ms &allow-other-keys)
-  (declare (ignore model-override timeout-ms))
+  (declare (ignorable model-override))
   (let ((content-generator (get-content-generator self)))
     (sb-thread:with-mutex ((conversational-agent-lock self))
       (cond ((eq prompt :pop!)
@@ -142,7 +142,9 @@
                                             prompt
                                             :context (conversational-agent-conversation self)
                                             :parts parts
-                                            :files files)))
+                                            :files files
+                                            :read-timeout (if timeout-ms (max 1 (floor timeout-ms 1000))
+                                                              300))))
                (setf (conversational-agent-conversation self)
                      (append (conversational-agent-conversation self)
                              (mapcar #'dehashify (->prompt prompt content-generator))

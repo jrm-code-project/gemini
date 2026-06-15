@@ -545,6 +545,23 @@
     (let ((resp (gemini::invoke agent "Ping" :model-override dummy-model)))
       (is (equal "mocked response" resp)))))
 
+(test with-abandonable-task-robustness
+  "Test that with-abandonable-task supports error propagation and bypasses thread spawning in parallel contexts."
+  ;; 1. Synchronous fallback inside parallel context
+  (let ((gemini::*in-parallel-context* t)
+        (executed nil))
+    (let ((res (gemini::with-abandonable-task (:name "Sync Test")
+                 (setf executed t)
+                 "synchronous result")))
+      (is (eq t executed))
+      (is (equal "synchronous result" res))))
+
+  ;; 2. Error propagation in sequential context
+  (let ((gemini::*in-parallel-context* nil))
+    (signals error
+      (gemini::with-abandonable-task (:name "Error Test")
+        (error "background threat simulated")))))
+
 (test scheme-and-critique-mocked-flow
   "Test adversarial loop recursion depth and chaos verification flow using mock models."
   (let* ((conniver-called 0)

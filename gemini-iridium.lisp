@@ -2,18 +2,81 @@
 
 (in-package "GEMINI")
 
+(defvar *in-parallel-context* nil
+  "Special variable bound to T inside parallel mapping to prevent nested thread spawning.")
+
+(defmacro with-abandonable-task ((&key (name "Background Task")) &body body)
+  "Spawns a background thread to execute BODY, unless running in a parallel context.
+The foreground thread (REPL) waits for completion but can be interrupted (Control-C)
+to abandon the task and return immediately to the REPL, leaving the task running."
+  (let ((thread-sym (gensym "THREAD"))
+        (io-sym (gensym "IO"))
+        (res-sym (gensym "RES")))
+    `(if *in-parallel-context*
+         (progn ,@body)
+         (let* ((,io-sym (list *standard-input* *standard-output* *error-output*
+                                *trace-output* *debug-io* *query-io* *terminal-io*
+                                *package* *readtable*))
+                (,thread-sym (sb-thread:make-thread
+                              (lambda ()
+                                (destructuring-bind (in out err trace debug query term pkg rt) ,io-sym
+                                  (let ((*standard-input* in)
+                                        (*standard-output* out)
+                                        (*error-output* err)
+                                        (*trace-output* trace)
+                                        (*debug-io* debug)
+                                        (*query-io* query)
+                                        (*terminal-io* term)
+                                        (*package* pkg)
+                                        (*readtable* rt))
+                                    ;; The 'uninterruptible' core:
+                                    (sb-sys:without-interrupts
+                                      (sb-sys:allow-with-interrupts
+                                        (handler-case
+                                            (cons :ok (progn ,@body))
+                                          (error (e)
+                                            (cons :error e))))))))
+                              :name ,name)))
+           (format t "~&[V] Monitoring '~A'. Hit Control-C to abandon it to the background.~%" ,name)
+           (finish-output)
+           (let ((,res-sym (restart-case
+                               (handler-bind ((sb-sys:interactive-interrupt
+                                               (lambda (c)
+                                                 (declare (ignore c))
+                                                 (invoke-restart 'abandon-task))))
+                                 (sb-thread:join-thread ,thread-sym))
+                             (abandon-task ()
+                               :report (lambda (s) (format s "Abandon the thread '~A' and return to the REPL." ,name))
+                               (format t "~&[!] Task '~A' abandoned. It's a ghost now, Boss. Still running back there.~%" ,name)
+                               (finish-output)
+                               (cons :abandoned ,thread-sym)))))
+             (cond
+               ((eq (car ,res-sym) :ok)
+                (cdr ,res-sym))
+               ((eq (car ,res-sym) :error)
+                (error (cdr ,res-sym)))
+               ((eq (car ,res-sym) :abandoned)
+                (cdr ,res-sym))
+               (t ,res-sym)))))))
+
 ;;; Update the Agent invoke to pass the total budget down
 (defmethod invoke ((self agent) prompts &key model-override (timeout-ms nil))
   (let* ((active-model (resolve-agent-model self model-override))
-         (parts (mapcar #'part (if (listp prompts) prompts (list prompts)))))
+         (parts (mapcar #'part (if (listp prompts) prompts (list prompts))))
+         (answer nil))
     (handler-case
-        (content->text
-         (funcall active-model parts
-                  :system-instruction (agent-instruction self)
-                  ;; Pass the budget to the generator
-                  :read-timeout (and timeout-ms (max 1 (floor timeout-ms 1000)))
-                  :connect-timeout 30))
-      (error (e) (format nil "[Agent '~A' Error: ~A]" (agent-name self) e)))))
+        (let ((result (with-abandonable-task (:name (format nil "Agent '~A' Task" (agent-name self)))
+                        (content->text
+                         (funcall active-model parts
+                                  :system-instruction (agent-instruction self)
+                                  ;; Pass the budget to the generator
+                                  :read-timeout (and timeout-ms (max 1 (floor timeout-ms 1000)))
+                                  :connect-timeout 30)))))
+          (if (typep result 'sb-thread:thread)
+              (format nil "[Agent '~A' Task abandoned and running in background]" (agent-name self))
+              (setq answer result)))
+      (error (e) (setq answer (format nil "[Agent '~A' Error: ~A]" (agent-name self) e))))
+    answer))
 
 
 ;;; Specialized Agent Definitions
@@ -85,7 +148,7 @@
 ;;; ---------------------------------------------------------------------------
 
 (defun map-parallel (function list &key timeout-ms)
-  "Parallel map using sb-thread with join-thread timeout handling."
+  "Parallel map using sb-thread with join-thread timeout handling and aggressive cleanup."
   (let* ((captured-io (list *standard-input* *standard-output* *error-output*
                             *trace-output* *debug-io* *query-io* *terminal-io*
                             *package* *readtable*))
@@ -93,45 +156,52 @@
          (timeout-units (and timeout-ms (round (* timeout-ms (/ internal-time-units-per-second 1000.0)))))
          (deadline (and timeout-units (+ start-time timeout-units)))
          (threads nil))
-    ;; Spawn workers
-    (loop for item in list do
-          (let ((itm item))
-            (push (sb-thread:make-thread
-                   (lambda ()
-                     (destructuring-bind (in out err trace debug query term pkg rt) captured-io
-                       (let ((*standard-input* in)
-                             (*standard-output* out)
-                             (*error-output* err)
-                             (*trace-output* trace)
-                             (*debug-io* debug)
-                             (*query-io* query)
-                             (*terminal-io* term)
-                             (*package* pkg)
-                             (*readtable* rt))
-                         (handler-case
-                             (sb-ext:with-timeout (if timeout-ms (/ timeout-ms 1000.0) 3600)
-                               (funcall function itm))
-                           (sb-ext:timeout () "[TIMEOUT]")
-                           (error (e) (format nil "[ERROR: ~A]" e)))))))
-                  threads)))
-    ;; Wait for results in original order
-    (setf threads (nreverse threads))
-    ;; Join each thread with the remaining timeout budget
-    (loop for thread in threads
-          collect (let ((remaining-secs (when deadline
-                                          (let ((rem (- deadline (get-internal-real-time))))
-                                            (if (<= rem 0) 0.0 (/ (float rem) internal-time-units-per-second))))))
-                    (if (and deadline (<= remaining-secs 0))
-                        (progn
-                          (ignore-errors (sb-thread:terminate-thread thread))
-                          "[TIMEOUT]")
-                        (multiple-value-bind (val status)
-                            (sb-thread:join-thread thread :timeout remaining-secs :default "[TIMEOUT]")
-                          (if (eq status :timeout)
-                              (progn
-                                (ignore-errors (sb-thread:terminate-thread thread))
-                                "[TIMEOUT]")
-                              val)))))))
+    (unwind-protect
+         (progn
+           ;; Spawn workers
+           (loop for item in list do
+                (let ((itm item))
+                  (push (sb-thread:make-thread
+                         (lambda ()
+                           (destructuring-bind (in out err trace debug query term pkg rt) captured-io
+                             (let ((*standard-input* in)
+                                   (*standard-output* out)
+                                   (*error-output* err)
+                                   (*trace-output* trace)
+                                   (*debug-io* debug)
+                                   (*query-io* query)
+                                   (*terminal-io* term)
+                                   (*package* pkg)
+                                   (*readtable* rt)
+                                   (*in-parallel-context* t))
+                               (handler-case
+                                   (sb-ext:with-timeout (if timeout-ms (/ timeout-ms 1000.0) 3600)
+                                     (funcall function itm))
+                                 (sb-ext:timeout () "[TIMEOUT]")
+                                 (error (e) (format nil "[ERROR: ~A]" e)))))))
+                        threads)))
+           ;; Wait for results in original order
+           (setf threads (nreverse threads))
+           ;; Join each thread with the remaining timeout budget
+           (loop for thread in threads
+              collect (let ((remaining-secs (when deadline
+                                              (let ((rem (- deadline (get-internal-real-time))))
+                                                (if (<= rem 0) 0.0 (/ (float rem) internal-time-units-per-second))))))
+                        (if (and deadline (<= remaining-secs 0))
+                            (progn
+                              (ignore-errors (sb-thread:terminate-thread thread))
+                              "[TIMEOUT]")
+                            (multiple-value-bind (val status)
+                                (sb-thread:join-thread thread :timeout remaining-secs :default "[TIMEOUT]")
+                              (if (eq status :timeout)
+                                  (progn
+                                    (ignore-errors (sb-thread:terminate-thread thread))
+                                    "[TIMEOUT]")
+                                  val))))))
+      ;; Ensure all threads are terminated if we exit map-parallel (e.g., via Control-C)
+      (dolist (thread threads)
+        (when (sb-thread:thread-alive-p thread)
+          (ignore-errors (sb-thread:terminate-thread thread)))))))
 
 
 ;;; ---------------------------------------------------------------------------
@@ -159,8 +229,8 @@
             do (let ((name (if (consp critique) (car critique) (agent-name auditor)))
                      (msg (if (consp critique) (cdr critique) (if (stringp critique) critique "[TIMEOUT]"))))
                  (if (stringp msg)
-                     (format s "~%[~A]~%~A~%" name msg)
-                     (format s "~%[~A]~%[CRITIQUE FAILED/TIMEOUT]~%" name)))))))
+                 (format s "~%[~A]~%~A~%" name msg)
+                 (format s "~%[~A]~%[CRITIQUE FAILED/TIMEOUT]~%" name)))))))
 
 (defun scheme-and-critique (goal &key (depth 3) (context nil) (timeout-ms nil) (chaos nil))
   "Main entry point for the Iridium V5 adversarial refinement loop."
