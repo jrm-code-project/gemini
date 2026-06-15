@@ -7,21 +7,24 @@
 ;;;;;;;;
 
 (eval-when (:load-toplevel :execute)
-  (unless (probe-file (uiop/configuration:xdg-config-home))
-    (cerror "Create XDG configuration directory." "XDG configuration directory does not exist.")
-    (ensure-directories-exist (uiop/configuration:xdg-config-home))))
+  (let ((config-home (uiop/configuration:xdg-config-home)))
+    (unless (and config-home (probe-file config-home))
+      (cerror "Create XDG configuration directory." "XDG configuration directory does not exist.")
+      (ensure-directories-exist config-home))))
 
 (eval-when (:load-toplevel :execute)
-  (unless (probe-file (uiop/configuration:xdg-config-pathname "mcp/"))
-    (cerror "Create mcp configuration directory." "mcp configuration directory does not exist.")
-    (ensure-directories-exist (uiop/configuration:xdg-config-pathname "mcp/"))))
+  (let ((mcp-dir (uiop/configuration:xdg-config-pathname "mcp/")))
+    (unless (and mcp-dir (probe-file mcp-dir))
+      (cerror "Create mcp configuration directory." "mcp configuration directory does not exist.")
+      (ensure-directories-exist mcp-dir))))
 
 (defun mcp-config-pathname ()
   (uiop/configuration:xdg-config-pathname "mcp/mcp.lisp"))
 
 (eval-when (:load-toplevel :execute)
-  (unless (probe-file (mcp-config-pathname))
-    (warn "mcp.lisp configuration file does not exist, no mcp servers will be started.")))
+  (let ((config-pathname (mcp-config-pathname)))
+    (unless (and config-pathname (probe-file config-pathname))
+      (warn "mcp.lisp configuration file does not exist, no mcp servers will be started."))))
 
 (defun read-mcp-config ()
   (with-open-file (stream (mcp-config-pathname) :direction :input :if-does-not-exist nil)
@@ -52,7 +55,7 @@
    (delayed-resource-templates :initarg :delayed-resource-templates :reader delayed-resource-templates)
    (delayed-tools     :initarg :delayed-tools     :reader delayed-tools)
    (jsonrpc-client    :accessor jsonrpc-client)
-   (mutex :initform (bordeaux-threads:make-lock) :reader mutex)
+   (mutex :initform (sb-thread:make-mutex :name "mcp-server-lock") :reader mutex)
    (name  :initarg :name :reader get-name)
    (notification-filter :initform (constantly t) :accessor notification-filter)
    (notification-stream :initform *trace-output* :accessor notification-stream)
@@ -60,7 +63,7 @@
    ))
 
 (defun call-with-mcp-server-mutex (mcp-server thunk)
-  (bordeaux-threads:with-lock-held ((mutex mcp-server))
+  (sb-thread:with-mutex ((mutex mcp-server))
     (funcall thunk)))
 
 (defmacro with-mcp-server-mutex ((mcp-server) &body body)
@@ -361,7 +364,7 @@
          ;; (_ignore (format t "~&~s~%" messages))
          (system-prompt (get-system-prompt params))
          (temperature (and (stringp (get-temperature params))
-                           (read-from-string (get-temperature params))))
+                           (parse-float-safely (get-temperature params))))
          (sample (let ((*system-instruction*
                          (content
                           :parts (list (part system-prompt))))

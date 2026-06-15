@@ -21,7 +21,7 @@
 (defclass jsonrpc-client ()
   ((default-outgoing-channel :initform (make-instance 'chanl:channel)  :reader outgoing-channel)
    (incoming-channels        :initform (make-hash-table :test #'equal) :reader incoming-channels)
-   (mutex                    :initform (bordeaux-threads:make-lock)    :reader mutex)
+   (mutex                    :initform (sb-thread:make-mutex :name "jsonrpc-client-lock") :reader mutex)
    (latest-server-output     :initform (get-universal-time)            :accessor latest-server-output)
    (process-info             :initarg :process-info :reader process-info)
    (request-threads          :initform (make-hash-table :test #'equal) :reader request-threads))
@@ -31,7 +31,7 @@
   "Call THUNK while holding the lock of the JSONRPC-CLIENT."
   (check-type jsonrpc-client jsonrpc-client)
   (check-type thunk function)
-  (bordeaux-threads:with-lock-held ((mutex jsonrpc-client))
+  (sb-thread:with-mutex ((mutex jsonrpc-client))
     (funcall thunk)))
 
 (defmacro with-jsonrpc-client-lock ((jsonrpc-client) &body body)
@@ -61,7 +61,7 @@
   "Starts a new thread to execute `thunk` for the given `jsonrpc-client` and `id`. The thread is registered in the client's `request-threads` hash table and automatically deregistered upon completion or abortion. Provides an `abort` restart to gracefully terminate the thread."
   (check-type jsonrpc-client jsonrpc-client)
   (check-type thunk function)
-  (letrec ((new-thread (bordeaux-threads:make-thread
+  (letrec ((new-thread (sb-thread:make-thread
                         (lambda ()
                           (block nil
                             (unwind-protect
@@ -190,7 +190,7 @@
 
         (let ((input-thread
                 ;; Start a thread to send RPCs to the server.
-                (bordeaux-threads:make-thread
+                (sb-thread:make-thread
                  (lambda ()
                    (unwind-protect
                         (let iter ((json nil))
@@ -203,7 +203,7 @@
 
               (output-thread
                 ;; Start a thread to sink the standard output from the server.
-                (bordeaux-threads:make-thread
+                (sb-thread:make-thread
                  (json-receiver
                   (lambda (message)
                     (cond ((eql message eof-value)
@@ -224,8 +224,8 @@
                                   (request-id (get-request-id params))
                                   (thread (with-jsonrpc-client-lock (client)
                                             (gethash request-id (request-threads client)))))
-                             (when (and thread (bordeaux-threads:thread-alive-p thread))
-                               (bordeaux-threads:interrupt-thread thread #'abort))))
+                             (when (and thread (sb-thread:thread-alive-p thread))
+                               (sb-thread:interrupt-thread thread #'abort))))
 
                           ((equal (get-method message) "notifications/progress")
                            (let* ((params (get-params message))
@@ -262,7 +262,7 @@
 
               (error-thread
                 ;; Start a thread to sink the error output from the server.
-                (bordeaux-threads:make-thread
+                (sb-thread:make-thread
                  (error-receiver
                   (lambda (line)
                     (unless (eql line eof-value)
@@ -270,7 +270,7 @@
                       (finish-output *trace-output*))))
                  :name (format nil "~a JSONRPC Error Output" name))))
 
-          (bordeaux-threads:make-thread
+          (sb-thread:make-thread
            (lambda ()
              (let iter ()
                (sleep +jsonrpc-bookkeeper-interval+)
@@ -295,10 +295,10 @@
                       (finish-output *trace-output*)
                       ;; Terminate the process and all associated threads.
                       (chanl:send (outgoing-channel client) eof-value)
-                      (bordeaux-threads:join-thread input-thread)
+                      (sb-thread:join-thread input-thread)
                       (uiop:close-streams process-info)
-                      (bordeaux-threads:interrupt-thread error-thread #'abort)
-                      (bordeaux-threads:interrupt-thread output-thread #'abort)
+                      (sb-thread:interrupt-thread error-thread #'abort)
+                      (sb-thread:interrupt-thread output-thread #'abort)
                       (uiop:terminate-process (process-info client) :urgent t)
                       (uiop:wait-process (process-info client))
                       (format *trace-output* "~&Process for ~a has been terminated.~%" name)

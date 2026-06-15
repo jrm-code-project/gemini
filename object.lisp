@@ -44,6 +44,7 @@
   :include-timestamp
   :index
   :inline-data
+  :input
   :input-schema
   :instructions
   :items
@@ -112,6 +113,7 @@
   :snippet
   :source
   :speech-config
+  :steps
   :stop-sequences
   :subscribe
   :system-instruction
@@ -513,8 +515,10 @@
    (enable-shell-tools   :initarg :enable-shell-tools   :initform nil :accessor get-enable-shell-tools)
    (enable-web-tools     :initarg :enable-web-tools     :initform nil :accessor get-enable-web-tools)
    (generation-config    :initarg :generation-config :accessor %get-generation-config)
+   (googleapi            :initarg :googleapi            :initform t :accessor get-googleapi)
    (include-bash-history :initarg :include-bash-history :initform nil :accessor get-include-bash-history)
    (include-model        :initarg :include-model :initform nil :accessor get-include-model)
+   (include-mood         :initarg :include-mood :initform nil :accessor get-include-mood)
    (include-timestamp    :initarg :include-timestamp    :initform nil :accessor get-include-timestamp)
    (memory-filepath      :initarg :memory-filepath      :initform (make-pathname :name "memory" :type "json")
                          :accessor get-memory-filepath)
@@ -528,7 +532,8 @@
                                  :accessor get-system-instructions-filepath)
    (safety-settings      :initarg :safety-settings      :initform nil :accessor get-safety-settings)
    (temperature          :initarg :temperature          :accessor get-temperature)
-   (tool-config          :initarg :tool-config          :initform nil :accessor get-tool-config))
+   (tool-config          :initarg :tool-config          :initform nil :accessor get-tool-config)
+   (url                  :initarg :url                  :initform nil :accessor get-url))
 
   (:documentation "Class representing persona configuration."))
 
@@ -570,8 +575,8 @@
   "Initializes the content generator instance."
   (sb-mop:set-funcallable-instance-function
    instance
-   (lambda (prompt &key context parts files system-instruction)
-     (generate-content instance context prompt parts files system-instruction))))
+   (lambda (prompt &key context mood parts files system-instruction (read-timeout 300) (connect-timeout 60))
+     (generate-content instance context mood prompt parts files system-instruction :read-timeout read-timeout :connect-timeout connect-timeout))))
 
 (defmethod shared-initialize :after ((instance content-generator) slot-names &key config &allow-other-keys)
   "Initializes the content generator instance."
@@ -599,11 +604,17 @@
 (defmethod get-include-model ((object content-generator))
   (get-include-model (get-config object)))
 
+(defmethod get-include-mood ((object content-generator))
+  (get-include-mood (get-config object)))
+
 (defmethod get-include-timestamp ((object content-generator))
   (get-include-timestamp (get-config object)))
 
 (defmethod get-generation-config ((object content-generator))
   (get-generation-config (get-config object)))
+
+(defmethod get-googleapi ((object content-generator))
+  (get-googleapi (get-config object)))
 
 (defmethod get-model ((object content-generator))
   (get-model (get-config object)))
@@ -634,3 +645,19 @@
 (defmethod get-tool-config ((object content-generator))
   "Fetch the tool configuration for the content generator."
   (get-tool-config (get-config object)))
+
+(defmethod get-url ((object content-generator))
+  "Fetch the URL for the content generator."
+  (get-url (get-config object)))
+
+(declaim (special *gemini-flash* *gemini-uncensored*))
+
+(defclass agent ()
+  ((name :initarg :name :reader agent-name)
+   (instruction :initarg :instruction :reader agent-instruction)
+   (model :initarg :model :reader agent-model :initform nil)))
+
+(defun resolve-agent-model (agent override-model)
+  (or override-model (agent-model agent) *gemini-flash*))
+
+(defgeneric invoke (agent prompts &key model-override timeout-ms &allow-other-keys))

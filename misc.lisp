@@ -61,7 +61,7 @@
             (remove-if (lambda (line) (zerop (length line)))
                        (map 'list #'str:trim (str:split #\newline string :omit-nulls t)))))
 
-(defconstant +line-length-limit+ 80)
+(defparameter +line-length-limit+ 70)
 
 (defun reflow-line (line)
   "Reflow a single line to a list of lines, each no longer than 80 characters."
@@ -262,26 +262,26 @@ Does not add values to ALISTS."
               (gethash keyword object)
               (cdr (assoc keyword object :key #'->keyword)))))))
 
-(defun function-minimum-arity (func)
-  "Returns the minimum number of required arguments for the given function FUNC."
-  (collect-length
-   (until-if
-    (lambda (symbol)
-      (member symbol lambda-list-keywords))
-    (scan 'list (sb-introspect:function-lambda-list func)))))
+;; (defun function-minimum-arity (func)
+;;   "Returns the minimum number of required arguments for the given function FUNC."
+;;   (collect-length
+;;    (until-if
+;;     (lambda (symbol)
+;;       (member symbol lambda-list-keywords))
+;;     (scan 'list (sb-introspect:function-lambda-list func)))))
 
-(defun function-return-type (func)
-  "Returns the return type of a function as a string.
-   If the function has no declared return type, it returns NIL."
-  (let ((raw-function-type (sb-introspect:function-type func)))
-    (and (consp raw-function-type)
-         (eq (first raw-function-type) 'function)
-         (let ((raw-return-type (third raw-function-type)))
-           (if (consp raw-return-type)
-               (if (eq (first raw-return-type) 'values)
-                   (second raw-return-type)
-                   raw-return-type)
-               raw-return-type)))))
+;; (defun function-return-type (func)
+;;   "Returns the return type of a function as a string.
+;;    If the function has no declared return type, it returns NIL."
+;;   (let ((raw-function-type (sb-introspect:function-type func)))
+;;     (and (consp raw-function-type)
+;;          (eq (first raw-function-type) 'function)
+;;          (let ((raw-return-type (third raw-function-type)))
+;;            (if (consp raw-return-type)
+;;                (if (eq (first raw-return-type) 'values)
+;;                    (second raw-return-type)
+;;                    raw-return-type)
+;;                raw-return-type)))))
 
 (defun returns-string? (func)
   "Returns T if the function FUNC is declared to return a string."
@@ -438,24 +438,41 @@ Does not add values to ALISTS."
     (finish-output stream)))
 
 (defun read-full-forms (string)
-  "Reads all Lisp forms from STRING and returns them as a list."
-  (let ((eof-value (cons nil nil)))
-    (let iter ((forms '())
-               (pos 0))
-      (cond ((= pos (length string))
-             (if (null (cdr forms))
-                 (car forms)
-                 (cons 'progn (reverse forms))))
-            ((or (char= (char string pos) #\Space)
-                 (char= (char string pos) #\Return)
-                 (char= (char string pos) #\Newline)
-                 (char= (char string pos) #\Tab))
-             (iter forms (1+ pos)))
-            (t (multiple-value-bind (form limit)
-                   (read-from-string string nil eof-value :start pos)
-                 (cond ((equal form eof-value)
-                        (error "Could not read a full form from the string starting at position ~d: ~a" pos string))
-                       (t (iter (cons form forms) limit)))))))))
+  "Reads all Lisp forms from STRING using the hardened Predator Reader and returns them."
+  (uiop:with-temporary-file (:pathname temp-file :element-type '(unsigned-byte 8) :direction :output)
+    (let ((bytes (map '(vector (unsigned-byte 8)) #'char-code string)))
+      (with-open-file (out temp-file :direction :output :element-type '(unsigned-byte 8) :if-exists :supersede)
+        (write-sequence bytes out)))
+    (with-open-file (in temp-file :direction :input :element-type '(unsigned-byte 8))
+      (let ((forms '()))
+        (loop
+          (multiple-value-bind (form status) (predator-read in)
+            (cond
+              ((eq status :eof)
+               (return))
+              ((eq status :threat-eliminated)
+               (error "Expression evaluation blocked: threat detected or invalid syntax."))
+              (t
+               (push form forms)))))
+        (if (null forms)
+            nil
+            (if (null (cdr forms))
+            (car forms)
+            (cons 'progn (reverse forms))))))))
+
+            (defun parse-float-safely (string)
+            "Parses a float from STRING safely without using the Lisp reader."
+            (let* ((trimmed (str:trim string))
+            (clean (cl-ppcre:regex-replace-all "[^0-9.]" trimmed "")))
+            (if (and (string/= clean "") (search "." clean))
+            (let* ((parts (str:split "." clean))
+            (integer (or (parse-integer (car parts) :junk-allowed t) 0))
+            (fraction-str (cadr parts))
+            (fraction (or (parse-integer fraction-str :junk-allowed t) 0))
+            (divisor (expt 10 (length fraction-str))))
+            (float (+ integer (/ fraction divisor))))
+            ;; Fallback to integer or nil
+            (float (or (parse-integer clean :junk-allowed t) 0.0)))))
 
 (defun handle-tilde (namestring)
   "Handles tilde (~) in NAMESRING, expanding it to the user's home directory."
@@ -559,6 +576,7 @@ Does not add values to ALISTS."
       ((string-equal extension "csv")  "text/csv")
       ((string-equal extension "gif")  "image/gif")
       ((string-equal extension "html") "text/html")
+      ((string-equal extension "il")   "text/plain")
       ((string-equal extension "jpeg") "image/jpeg")
       ((string-equal extension "jpg")  "image/jpeg")
       ((string-equal extension "json") "application/json")
