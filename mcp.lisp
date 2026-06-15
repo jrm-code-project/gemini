@@ -204,7 +204,11 @@
                           (finish-output *trace-output*))))))))
 
     (setf (jsonrpc-client server) jsonrpc-clnt)
-    (initialize-mcp-server! server)
+    (handler-case
+        (initialize-mcp-server! server)
+      (error (e)
+        (format *trace-output* "~&Warning: Failed to initialize MCP server ~a: ~a~%" name e)
+        (finish-output *trace-output*)))
     server))
 
 (defparameter *mcp-protocol-version* "2025-06-18"

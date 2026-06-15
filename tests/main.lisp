@@ -93,6 +93,24 @@
   (with-binary-stream-from-string (stream "(LET (T) NIL)")
     (is (equal '(gemini::let (t) nil) (predator-read stream)))))
 
+(test predator-safe-whitelist-symbols
+  "Test that the newly added safe whitelist symbols parse correctly."
+  (dolist (sym-str '("LET*" "CONS" "CAR" "CDR" "LIST" "APPEND" "EQUAL" "PROGN" "COND" "SETQ" "SETF" "FORMAT" "PRINT"))
+    (with-binary-stream-from-string (stream sym-str)
+      (is (eq (find-symbol sym-str "GEMINI") (predator-read stream))))))
+
+(test enable-eval-boundp
+  "Test that *enable-eval* and other enable flags are bound and behave as special variables."
+  (is (boundp 'gemini::*enable-eval*))
+  (is (null gemini::*enable-eval*))
+  (let ((gemini::*enable-eval* t))
+    (is (eq t gemini::*enable-eval*)))
+  (is (boundp 'gemini::*enable-bash*))
+  (is (boundp 'gemini::*enable-interaction*))
+  (is (boundp 'gemini::*enable-lisp-introspection*))
+  (is (boundp 'gemini::*enable-web-functions*))
+  (is (boundp 'gemini::*enable-web-search*)))
+
 (test predator-whitespace
   "Test whitespace handling."
   (with-binary-stream-from-string (stream "   
@@ -587,3 +605,44 @@
         (setf gemini::*gemini-flash* orig-flash)
         (setf gemini::*gemini-uncensored* orig-uncensored)
         (setf gemini::*specialized-auditors* orig-auditors)))))
+
+(test gemini-debate-mocked
+  "Test that gemini-debate concurrently spawns proponent and opponent, and completes rebuttals using mock models."
+  (let* ((pro-called 0)
+         (con-called 0)
+         (pro-rebuttal-called 0)
+         (con-rebuttal-called 0)
+         (mock-model (lambda (parts &key system-instruction &allow-other-keys)
+                       (declare (ignore parts))
+                       (cond
+                         ((search "FAVOR" system-instruction)
+                          (if (= pro-called 0)
+                              (progn (incf pro-called)
+                                     (gemini::content :parts (list (part "pro-opening")) :role "model"))
+                              (progn (incf pro-rebuttal-called)
+                                     (gemini::content :parts (list (part "pro-rebuttal")) :role "model"))))
+                         ((search "AGAINST" system-instruction)
+                          (if (= con-called 0)
+                              (progn (incf con-called)
+                                     (gemini::content :parts (list (part "con-opening")) :role "model"))
+                              (progn (incf con-rebuttal-called)
+                                     (gemini::content :parts (list (part "con-rebuttal")) :role "model"))))))))
+    
+    (let ((orig-flash gemini::*gemini-flash*))
+      (unwind-protect
+           (progn
+             (setf gemini::*gemini-flash* mock-model)
+             ;; Silence standard-output to keep terminal spam-free during test
+             (let ((*standard-output* (make-broadcast-stream)))
+               (multiple-value-bind (pro-opening con-opening pro-rebuttal con-rebuttal)
+                   (gemini:gemini-debate "Mock Statement" :timeout-ms 2000)
+                 (is (equal "pro-opening" pro-opening))
+                 (is (equal "con-opening" con-opening))
+                 (is (equal "pro-rebuttal" pro-rebuttal))
+                 (is (equal "con-rebuttal" con-rebuttal))
+                 (is (= 1 pro-called))
+                 (is (= 1 con-called))
+                 (is (= 1 pro-rebuttal-called))
+                 (is (= 1 con-rebuttal-called)))))
+        ;; Restore
+        (setf gemini::*gemini-flash* orig-flash)))))

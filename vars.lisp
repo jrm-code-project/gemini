@@ -100,6 +100,36 @@
   (when (boundp '*enable-advanced-civic-answers*)
     *enable-advanced-civic-answers*))
 
+(defvar *enable-bash* nil)
+(eval-when (:compile-toplevel :load-toplevel :execute)
+  (setf (documentation '*enable-bash* 'variable)
+        "Controls whether bash tool is enabled."))
+
+(defvar *enable-eval* nil)
+(eval-when (:compile-toplevel :load-toplevel :execute)
+  (setf (documentation '*enable-eval* 'variable)
+        "Controls whether Lisp evaluation is enabled."))
+
+(defvar *enable-interaction* nil)
+(eval-when (:compile-toplevel :load-toplevel :execute)
+  (setf (documentation '*enable-interaction* 'variable)
+        "Controls whether interaction is enabled."))
+
+(defvar *enable-lisp-introspection* nil)
+(eval-when (:compile-toplevel :load-toplevel :execute)
+  (setf (documentation '*enable-lisp-introspection* 'variable)
+        "Controls whether Lisp introspection is enabled."))
+
+(defvar *enable-web-functions* nil)
+(eval-when (:compile-toplevel :load-toplevel :execute)
+  (setf (documentation '*enable-web-functions* 'variable)
+        "Controls whether web functions are enabled."))
+
+(defvar *enable-web-search* nil)
+(eval-when (:compile-toplevel :load-toplevel :execute)
+  (setf (documentation '*enable-web-search* 'variable)
+        "Controls whether web search is enabled."))
+
 (defvar *frequency-penalty*)
 (eval-when (:compile-toplevel :load-toplevel :execute)
   (setf (documentation '*frequency-penalty* 'variable)

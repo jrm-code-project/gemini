@@ -203,3 +203,51 @@
       ;; Initial Boot: The Conniver dreams up the base plan
       (let ((initial-plan (invoke conniver (format nil "PLANNER: Goal is ~A. Context: ~A" goal context) :timeout-ms timeout-ms)))
         (recurse initial-plan depth nil)))))
+
+(defun gemini-debate (statement &key (timeout-ms 120000))
+  "Spawns two debate participants—one arguing for the statement being true, one for it being false.
+   Each participant is allocated up to `timeout-ms` (default 2 minutes) to formulate their arguments concurrently."
+  (let* ((pro-agent (make-instance 'agent :name "Proponent"
+                                         :instruction (format nil "You are an elite debater. Your goal is to argue passionately and logically in FAVOR of the statement: '~A'. Present a compelling opening argument." statement)))
+         (con-agent (make-instance 'agent :name "Opponent"
+                                         :instruction (format nil "You are an elite debater. Your goal is to argue passionately and logically AGAINST the statement: '~A'. Present a compelling opening argument." statement)))
+         (participants (list pro-agent con-agent)))
+    
+    (format *standard-output* "~&=== INITIATING DEBATE ===~%")
+    (format *standard-output* "Statement: \"~A\"~%" statement)
+    (format *standard-output* "Each participant has ~A seconds to prepare...~%~%" (/ timeout-ms 1000.0))
+    (finish-output *standard-output*)
+    
+    ;; Run both opening arguments concurrently
+    (let ((arguments (map-parallel (lambda (agent)
+                                     (invoke agent statement :timeout-ms timeout-ms))
+                                   participants
+                                   :timeout-ms timeout-ms)))
+      
+      (let ((pro-arg (first arguments))
+            (con-arg (second arguments)))
+        (format *standard-output* "--- [PROPONENT OPENING] ---~%~A~%~%" pro-arg)
+        (format *standard-output* "--- [OPPONENT OPENING] ---~%~A~%~%" con-arg)
+        (finish-output *standard-output*)
+        
+        ;; Rebuttal Phase
+        (format *standard-output* "=== REBUTTAL PHASE ===~%")
+        (finish-output *standard-output*)
+        
+        (let ((rebuttals (map-parallel 
+                          (lambda (pair)
+                            (let ((agent (car pair))
+                                  (opponent-arg (cdr pair)))
+                              (invoke agent (format nil "Read your opponent's opening argument:~%~%~A~%~%Provide a robust, devastating rebuttal to their points." opponent-arg)
+                                      :timeout-ms timeout-ms)))
+                          (list (cons pro-agent con-arg)
+                                (cons con-agent pro-arg))
+                          :timeout-ms timeout-ms)))
+          
+          (let ((pro-rebuttal (first rebuttals))
+                (con-rebuttal (second rebuttals)))
+            (format *standard-output* "--- [PROPONENT REBUTTAL] ---~%~A~%~%" pro-rebuttal)
+            (format *standard-output* "--- [OPPONENT REBUTTAL] ---~%~A~%~%" con-rebuttal)
+            (finish-output *standard-output*)
+            
+            (values pro-arg con-arg pro-rebuttal con-rebuttal)))))))

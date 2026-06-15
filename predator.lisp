@@ -32,8 +32,19 @@
   (transitions nil :type list)) ; list of (byte . trie-node)
 
 (defparameter *default-vocabulary*
-  '("T" "NIL" "AND" "OR" "NOT" "IF" "LET" "LAMBDA" "DEFINE" "QUOTE" "DEFUN"
-    "STATUS" "OK" "ERROR" "PREDATOR" "MACHINE" "ARENA" "+" "-"))
+  '("T" "NIL" "AND" "OR" "NOT" "IF" "LET" "LET*" "LAMBDA" "DEFINE" "QUOTE" "DEFUN"
+    "STATUS" "OK" "ERROR" "PREDATOR" "MACHINE" "ARENA"
+    "+" "-" "*" "/" "1+" "1-" "=" "/=" "<" ">" "<=" ">="
+    "CAR" "CDR" "CONS" "LIST" "APPEND" "CONCATENATE" "LENGTH" "REVERSE" "NREVERSE"
+    "MEMBER" "FIND" "POSITION" "ASSOC" "MAPCAR" "MAP" "REDUCE" "SUBSEQ"
+    "FIRST" "SECOND" "THIRD" "FOURTH" "REST" "LAST" "NTH"
+    "CAAR" "CADR" "CDAR" "CDDR" "CAAAR" "CAADR" "CADAR" "CADDR" "CDAAR" "CDADR" "CDDAR" "CDDDR"
+    "EQ" "EQL" "EQUAL" "EQUALP" "ATOM" "CONSP" "LISTP" "SYMBOLP" "NUMBERP" "INTEGERP" "FLOATP" "STRINGP" "CHARACTERP" "FUNCTIONP" "NULL"
+    "PROGN" "COND" "WHEN" "UNLESS" "CASE" "ECASE" "LOOP" "DOLIST" "DOTIMES" "BLOCK" "RETURN" "RETURN-FROM" "TAGBODY" "GO"
+    "FUNCTION" "FUNCALL" "APPLY" "DEFPARAMETER" "DEFVAR" "SETQ" "SETF" "FLET" "LABELS" "MACROLET" "SYMBOL-MACROLET"
+    "MULTIPLE-VALUE-BIND" "MULTIPLE-VALUE-LIST" "MULTIPLE-VALUE-SETQ" "VALUES" "PROG1" "PROG2" "DEFMACRO" "DEFTYPE" "DEFSTRUCT" "DEFCLASS"
+    "FORMAT" "PRINT" "PRIN1" "PRINC" "TERPRI" "FRESH-LINE" "WRITE-TO-STRING"
+    "ABS" "MAX" "MIN" "MOD" "REM" "EXPT" "SQRT" "FLOOR" "CEILING" "ROUND" "TRUNCATE" "ZEROP" "PLUSP" "MINUSP" "ODDP" "EVENP"))
 
 (defun trie-insert (root bytes value)
   (let ((curr root))
@@ -318,9 +329,9 @@
     (consume-whitespace ctx)
     (let ((first-b (peek-byte-ctx ctx nil)))
       (if (eq first-b :eof)
-          nil
+          (values nil :eof)
           (let ((start-idx (parse-expression ctx)))
-            (reconstruct-ast arena start-idx))))))
+            (values (reconstruct-ast arena start-idx) :ok))))))
 
 (defun predator-read (stream &key (timeout-ms 500))
   "Parses a single S-expression from STREAM using Predator Reader v4.0.

@@ -44,6 +44,30 @@ You can also set the API key at runtime:
 (setf (getenv "GOOGLE_API_KEY") "your-api-key")
 ```
 
+## Switching Between Google and OpenAI-Compatible Backends
+
+Backend selection is configured per persona via that persona's `config.lisp`.
+
+Default behavior is Google Gemini API:
+
+```common-lisp
+:googleapi t
+```
+
+To use an OpenAI-compatible backend instead:
+
+```common-lisp
+:googleapi nil
+:model "gpt-4o-mini"
+:url "https://api.openai.com/v1/chat/completions"
+```
+
+Notes:
+- `:googleapi t` uses the existing Google Gemini API flow.
+- `:googleapi nil` routes requests through the OpenAI-compatible chat completions endpoint.
+- `:url` is optional. If omitted, the default is `http://localhost:1234/v1/chat/completions`.
+- OpenAI-compatible authorization currently uses the existing hardcoded header in the implementation (`Bearer lm-studio`) for local-compatible backends.
+
 ## Dependencies
 
 This library depends on:
@@ -160,9 +184,9 @@ See `LICENSE` for details. This project is licensed under the MIT License.
 
 This library was initially developed as a personal tool and, as such, contains certain architectural decisions that reflect its original scope. Users and potential contributors should be aware of the following limitations, which are the primary targets for future refactoring and development:
 
-1.  **Tight Coupling to Google Gemini API:**
-    The current implementation is hardwired directly to the Google Gemini API. All HTTP requests, authentication methods, and payload structures in `gemini.lisp` are specific to Google's backend. This makes the system inflexible and not easily adaptable to other LLM providers (e.g., Anthropic, OpenAI, Together.ai, or local models).
-    *   **Roadmap:** A major future goal is to introduce a generic backend abstraction layer. This will involve defining a common "LLM client" interface and refactoring the core logic to operate against that interface. Specific API providers, including the existing Gemini implementation, will then be moved into their own backend modules that adhere to this new standard.
+1.  **Backend Abstraction Is Still In Progress:**
+    The implementation now supports per-persona switching between the Google Gemini API and OpenAI-compatible chat-completions backends. However, core conversation logic is still centered on Gemini-style internal objects and not yet a fully provider-agnostic client interface. Some provider-specific behavior (tool-calling semantics, advanced safety controls, and payload feature parity) still requires further normalization.
+    *   **Roadmap:** Continue refactoring toward a generic backend abstraction layer with a common "LLM client" interface. Provider adapters (Gemini, OpenAI-compatible, and others) should each implement the same contract so core logic can remain backend-neutral.
 
 2.  **Global, Single-Threaded Conversation Context:**
     The conversational state is managed via a global special variable (`*context*`). This model is simple and effective for linear, single-user, single-model conversations. However, it becomes unwieldy for more complex scenarios, such as:
