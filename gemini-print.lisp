@@ -101,17 +101,34 @@
              (when lines
                (smart-wrap (str:join " " lines) 80 :first-prefix "  ")))
 
+           (lines->paragraphs (lines*)
+             (let next ((remaining lines*) (current-para nil) (paragraphs nil))
+               (cond ((null remaining)
+                      (if current-para
+                          (nreverse (cons (reverse current-para) paragraphs))
+                          (nreverse paragraphs)))
+                     ((str:emptyp (str:trim (car remaining)))
+                      (if current-para
+                          (next (cdr remaining) nil (cons (reverse current-para) paragraphs))
+                          (next (cdr remaining) nil paragraphs)))
+                     (t
+                      (next (cdr remaining) (cons (car remaining) current-para) paragraphs)))))
+
            (process-text-buffer (lines)
              ;; Group buffered lines into paragraphs (separated by blank lines)
-             (let next ((remaining lines) (para-acc nil))
-               (cond ((null remaining)
-                      (when para-acc (reflow-paragraph (reverse para-acc))))
-                     ((str:emptyp (str:trim (car remaining)))
-                      (when para-acc (reflow-paragraph (reverse para-acc)))
-                      (format *trace-output* "~%")
-                      (next (cdr remaining) nil))
+             (let ((paragraphs (lines->paragraphs lines)))
+               (cond ((null paragraphs) nil)
+                     ((null (cdr paragraphs))
+                      ;; Only 1 paragraph -> print normally
+                      (reflow-paragraph (car paragraphs)))
                      (t
-                      (next (cdr remaining) (cons (car remaining) para-acc))))))
+                      ;; Several paragraphs -> print all but the last, then print "..."
+                      (loop for (para . rest) on paragraphs
+                            do (if (null rest)
+                                   (format *trace-output* "~&...~%")
+                                   (progn
+                                     (reflow-paragraph para)
+                                     (format *trace-output* "~%"))))))))
 
            (get-prefix (regex line)
              (multiple-value-bind (start end reg-start reg-end)

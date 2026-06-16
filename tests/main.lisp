@@ -275,7 +275,8 @@
                     (gemini::print-text nil results))))
       ;; Should reflow lines 1 & 2 into paragraph with leading indentation "  "
       (is (search "  Line 1. Line 2." output))
-      (is (search "  Line 3 after blank line." output))))
+      (is (search "..." output))
+      (is (not (search "  Line 3 after blank line." output)))))
   
   ;; Bowdlerization
   (let* ((censored-results (gemini::object :candidates (list (gemini::object :content (content :parts (list (part "Hello world secret!")) :role "model"))))))
