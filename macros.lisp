@@ -22,5 +22,22 @@
            (finish-output *trace-output*))))))
 
 (defmacro future (&body body)
-  "Spawns a thread to evaluate BODY and returns a FUTURE object."
-  `(make-future :thread (sb-thread:make-thread (lambda () ,@body) :name "Future Evaluation Thread")))
+  "Spawns a thread to evaluate BODY, captures any fatal errors, and returns a FUTURE object."
+  (let ((fut-sym (gensym "FUT"))
+        (res-sym (gensym "RES")))
+    `(let* ((,fut-sym (make-future)))
+       (setf (future-thread ,fut-sym)
+             (sb-thread:make-thread
+              (lambda ()
+                (let ((,res-sym (handler-case
+                                    (cons :ok (progn ,@body))
+                                  (error (e)
+                                    (cons :error e)))))
+                  (sb-thread:with-mutex ((future-lock ,fut-sym))
+                    (if (eq (car ,res-sym) :ok)
+                        (setf (future-state ,fut-sym) :completed
+                              (future-value ,fut-sym) (cdr ,res-sym))
+                        (setf (future-state ,fut-sym) :failed
+                              (future-error ,fut-sym) (cdr ,res-sym))))))
+              :name "Future Evaluation Thread"))
+       ,fut-sym)))

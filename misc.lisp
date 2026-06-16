@@ -681,7 +681,11 @@ Does not add values to ALISTS."
     (and stream (stream->form-list stream))))
 
 (defstruct future
-  (thread nil :type sb-thread:thread))
+  thread
+  (state :pending)
+  value
+  error
+  (lock (sb-thread:make-mutex :name "Future Lock")))
 
 (define-condition future-timeout (error)
   ((future :initarg :future :reader future-timeout-future)
@@ -701,8 +705,17 @@ Does not add values to ALISTS."
   "Joins the thread computing the future's value. If TIMEOUT is specified
    (in seconds), waits up to that amount of time. If the timeout expires,
    signals a FUTURE-TIMEOUT error. If interrupted by Control-C, stops waiting
-   and signals a FUTURE-INTERRUPTED error, leaving the thread running."
+   and signals a FUTURE-INTERRUPTED error, leaving the thread running.
+   If the future completed with an error, that error is propagated."
   (check-type future future)
+  ;; 1. Check if already resolved/cached
+  (sb-thread:with-mutex ((future-lock future))
+    (cond ((eq (future-state future) :completed)
+           (return-from await (future-value future)))
+          ((eq (future-state future) :failed)
+           (error (future-error future)))))
+
+  ;; 2. Block until thread finishes
   (let ((timeout-token '#:timeout))
     (handler-case
         (handler-bind ((sb-sys:interactive-interrupt
@@ -713,9 +726,15 @@ Does not add values to ALISTS."
               (sb-thread:join-thread (future-thread future)
                                      :timeout timeout
                                      :default timeout-token)
+            (declare (ignore res))
             (if (eq status :timeout)
                 (error 'future-timeout :future future :timeout timeout)
-                res)))
+                (sb-thread:with-mutex ((future-lock future))
+                  (cond ((eq (future-state future) :completed)
+                         (future-value future))
+                        ((eq (future-state future) :failed)
+                         (error (future-error future)))
+                        (t (error "Future thread finished but state is still pending?")))))))
       (sb-sys:interactive-interrupt (c)
         (declare (ignore c))
         (error 'future-interrupted :future future)))))

@@ -862,4 +862,9 @@
          (f-fast (gemini:future (sleep 0.1) :fast))
          (winner (gemini:await-any (list f-slow f-fast))))
     (is (eq winner f-fast))
-    (is (eq :fast (gemini:await winner)))))
+    (is (eq :fast (gemini:await winner))))
+
+  ;; 6. Capturing and propagating fatal future errors
+  (let ((fut (gemini:future (error "simulated fatal error"))))
+    (signals error (gemini:await fut))
+    (signals error (gemini:await fut))))
