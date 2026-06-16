@@ -474,6 +474,34 @@
   "Test that content->text safely returns an empty string when the input content is NIL."
   (is (equal "" (gemini::content->text nil))))
 
+(test similarity-commutativity
+  "Test that the similarity function is commutative (symmetrical)."
+  (uiop:with-temporary-file (:stream s1 :pathname p1 :direction :output)
+    (write-string "hello" s1)
+    (close s1)
+    (uiop:with-temporary-file (:stream s2 :pathname p2 :direction :output)
+      (write-string "world" s2)
+      (close s2)
+      (let* ((called 0)
+             ;; Mock gemini-flash-lite
+             (mock-flash-lite (lambda (prompt &key &allow-other-keys)
+                                (declare (ignore prompt))
+                                (incf called)
+                                (gemini::content :parts (list (part "0.75")) :role "model"))))
+        (let ((orig-flash-lite (fdefinition 'gemini::gemini-flash-lite)))
+          (unwind-protect
+               (progn
+                 (setf (fdefinition 'gemini::gemini-flash-lite) mock-flash-lite)
+                 ;; Compare p1 and p2
+                 (let ((score1 (gemini::similarity p1 p2))
+                       (score2 (gemini::similarity p2 p1)))
+                   (is (= 0.75 score1))
+                   (is (= 0.75 score2))
+                   (is (= score1 score2))
+                   (is (= 2 called))))
+            ;; Restore
+            (setf (fdefinition 'gemini::gemini-flash-lite) orig-flash-lite)))))))
+
 ;;; Test suite for gemini-iridium functions
 (def-suite gemini-iridium-tests
   :description "Tests for gemini-iridium functions."
