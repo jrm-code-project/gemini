@@ -826,3 +826,16 @@
     (is (= 0 (getf stats :returned-value)))
     (is (= 0 (getf stats :returned-nothing)))
     (is (= 0 (getf stats :aborted)))))
+
+(test test-future-concurrency
+  "Test that the future and await feature evaluates forms in parallel and supports timeouts."
+  ;; 1. Normal execution
+  (let ((fut (gemini:future (+ 40 2))))
+    (is (typep fut 'gemini::future))
+    (is (= 42 (gemini:await fut))))
+
+  ;; 2. Timeout error
+  (let ((fut (gemini:future (sleep 2))))
+    (is (typep fut 'gemini::future))
+    (signals gemini:future-timeout
+      (gemini:await fut :timeout 0.1))))

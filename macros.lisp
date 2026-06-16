@@ -20,3 +20,7 @@
          (let ((,elapsed-time-var (local-time:timestamp-difference (local-time:now) ,start-time-var)))
            (format *trace-output* "~&;; ~a ~:[finished in~;aborted after~] ~,2f seconds.~%" ,tag-var ,aborted-var ,elapsed-time-var)
            (finish-output *trace-output*))))))
+
+(defmacro future (&body body)
+  "Spawns a thread to evaluate BODY and returns a FUTURE object."
+  `(make-future :thread (sb-thread:make-thread (lambda () ,@body) :name "Future Evaluation Thread")))

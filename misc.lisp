@@ -679,3 +679,28 @@ Does not add values to ALISTS."
    Uses a tail-recursive helper with an accumulator for stack-safe efficiency."
   (with-open-file (stream pathname :direction :input :if-does-not-exist nil)
     (and stream (stream->form-list stream))))
+
+(defstruct future
+  (thread nil :type sb-thread:thread))
+
+(define-condition future-timeout (error)
+  ((future :initarg :future :reader future-timeout-future)
+   (timeout :initarg :timeout :reader future-timeout-time))
+  (:report (lambda (c s)
+             (format s "Future ~A timed out after ~A seconds."
+                     (future-timeout-future c)
+                     (future-timeout-time c)))))
+
+(defun await (future &key timeout)
+  "Joins the thread computing the future's value. If TIMEOUT is specified
+   (in seconds), waits up to that amount of time. If the timeout expires,
+   signals a FUTURE-TIMEOUT error."
+  (check-type future future)
+  (let ((timeout-token '#:timeout))
+    (multiple-value-bind (res status)
+        (sb-thread:join-thread (future-thread future)
+                               :timeout timeout
+                               :default timeout-token)
+      (if (eq status :timeout)
+          (error 'future-timeout :future future :timeout timeout)
+          res))))
