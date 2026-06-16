@@ -849,4 +849,17 @@
          (lambda ()
            (sleep 0.1)
            (sb-thread:interrupt-thread parent-thread (lambda () (error 'sb-sys:interactive-interrupt)))))
-        (gemini:await fut)))))
+        (gemini:await fut))))
+
+  ;; 4. await-all verification
+  (let* ((f1 (gemini:future (+ 1 2)))
+         (f2 (gemini:future (* 3 4)))
+         (results (gemini:await-all (list f1 f2))))
+    (is (equal '(3 12) results)))
+
+  ;; 5. await-any verification (selective completion)
+  (let* ((f-slow (gemini:future (sleep 2.0) :slow))
+         (f-fast (gemini:future (sleep 0.1) :fast))
+         (winner (gemini:await-any (list f-slow f-fast))))
+    (is (eq winner f-fast))
+    (is (eq :fast (gemini:await winner)))))

@@ -719,3 +719,34 @@ Does not add values to ALISTS."
       (sb-sys:interactive-interrupt (c)
         (declare (ignore c))
         (error 'future-interrupted :future future)))))
+
+(defun await-all (futures &key timeout)
+  "Awaits all futures in the given FUTURES list by mapping AWAIT over them.
+   Returns the list of computed values. If TIMEOUT is specified, the timeout
+   budget is applied successively to each await."
+  (mapcar (lambda (fut) (await fut :timeout timeout)) futures))
+
+(defun await-any (futures &key timeout)
+  "Waits until one of the futures in the list has completed, and returns that future object.
+   If TIMEOUT is provided (in seconds), raises a FUTURE-TIMEOUT error if no future completes in that time."
+  (let ((start-time (get-internal-real-time))
+        (timeout-units (and timeout (* timeout internal-time-units-per-second))))
+    (handler-case
+        (handler-bind ((sb-sys:interactive-interrupt
+                        (lambda (c)
+                          (declare (ignore c))
+                          (error 'future-interrupted :future futures))))
+          (loop
+            (let ((completed-fut (find-if (lambda (fut)
+                                            (not (sb-thread:thread-alive-p (future-thread fut))))
+                                          futures)))
+              (if completed-fut
+                  (return completed-fut)
+                  (progn
+                    (when (and timeout-units
+                               (> (- (get-internal-real-time) start-time) timeout-units))
+                      (error 'future-timeout :future futures :timeout timeout))
+                    (sleep 0.005))))))
+      (sb-sys:interactive-interrupt (c)
+        (declare (ignore c))
+        (error 'future-interrupted :future futures)))))
