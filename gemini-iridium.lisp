@@ -9,7 +9,7 @@
   "Spawns a background thread to execute BODY, unless running in a parallel context.
 The foreground thread (REPL) waits for completion but can be interrupted (Control-C)
 to abandon the task and return immediately to the REPL, leaving the task running."
-  (let ((thread-sym (gensym "THREAD"))
+  (let ((fut-sym (gensym "FUT"))
         (io-sym (gensym "IO"))
         (res-sym (gensym "RES")))
     `(if *in-parallel-context*
@@ -17,39 +17,29 @@ to abandon the task and return immediately to the REPL, leaving the task running
          (let* ((,io-sym (list *standard-input* *standard-output* *error-output*
                                 *trace-output* *debug-io* *query-io* *terminal-io*
                                 *package* *readtable*))
-                (,thread-sym (sb-thread:make-thread
-                              (lambda ()
-                                (destructuring-bind (in out err trace debug query term pkg rt) ,io-sym
-                                  (let ((*standard-input* in)
-                                        (*standard-output* out)
-                                        (*error-output* err)
-                                        (*trace-output* trace)
-                                        (*debug-io* debug)
-                                        (*query-io* query)
-                                        (*terminal-io* term)
-                                        (*package* pkg)
-                                        (*readtable* rt))
-                                    ;; The 'uninterruptible' core:
-                                    (sb-sys:without-interrupts
-                                      (sb-sys:allow-with-interrupts
-                                        (handler-case
-                                            (cons :ok (progn ,@body))
-                                          (error (e)
-                                            (cons :error e))))))))
-                              :name ,name)))
+                (,fut-sym (future
+                            (destructuring-bind (in out err trace debug query term pkg rt) ,io-sym
+                              (let ((*standard-input* in)
+                                    (*standard-output* out)
+                                    (*error-output* err)
+                                    (*trace-output* trace)
+                                    (*debug-io* debug)
+                                    (*query-io* query)
+                                    (*terminal-io* term)
+                                    (*package* pkg)
+                                    (*readtable* rt))
+                                (handler-case
+                                    (cons :ok (progn ,@body))
+                                  (error (e)
+                                    (cons :error e))))))))
            (format t "~&[V] Monitoring '~A'. Hit Control-C to abandon it to the background.~%" ,name)
            (finish-output)
-           (let ((,res-sym (restart-case
-                               (handler-bind ((sb-sys:interactive-interrupt
-                                               (lambda (c)
-                                                 (declare (ignore c))
-                                                 (invoke-restart 'abandon-task))))
-                                 (sb-thread:join-thread ,thread-sym))
-                             (abandon-task ()
-                               :report (lambda (s) (format s "Abandon the thread '~A' and return to the REPL." ,name))
+           (let ((,res-sym (handler-case
+                               (await ,fut-sym)
+                             (future-interrupted ()
                                (format t "~&[!] Task '~A' abandoned. It's a ghost now, Boss. Still running back there.~%" ,name)
                                (finish-output)
-                               (cons :abandoned ,thread-sym)))))
+                               (cons :abandoned (future-thread ,fut-sym))))))
              (cond
                ((eq (car ,res-sym) :ok)
                 (cdr ,res-sym))
@@ -160,60 +150,47 @@ to abandon the task and return immediately to the REPL, leaving the task running
 ;;; ---------------------------------------------------------------------------
 
 (defun map-parallel (function list &key timeout-ms)
-  "Parallel map using sb-thread with join-thread timeout handling and aggressive cleanup."
+  "Parallel map using futures with automatic timeout and aggressive cleanup."
   (let* ((captured-io (list *standard-input* *standard-output* *error-output*
                             *trace-output* *debug-io* *query-io* *terminal-io*
                             *package* *readtable*))
-         (start-time (get-internal-real-time))
-         (timeout-units (and timeout-ms (round (* timeout-ms (/ internal-time-units-per-second 1000.0)))))
-         (deadline (and timeout-units (+ start-time timeout-units)))
-         (threads nil))
+         (futures nil))
     (unwind-protect
          (progn
-           ;; Spawn workers
-           (loop for item in list do
-                (let ((itm item))
-                  (push (sb-thread:make-thread
-                         (lambda ()
-                           (destructuring-bind (in out err trace debug query term pkg rt) captured-io
-                             (let ((*standard-input* in)
-                                   (*standard-output* out)
-                                   (*error-output* err)
-                                   (*trace-output* trace)
-                                   (*debug-io* debug)
-                                   (*query-io* query)
-                                   (*terminal-io* term)
-                                   (*package* pkg)
-                                   (*readtable* rt)
-                                   (*in-parallel-context* t))
-                               (handler-case
-                                   (sb-ext:with-timeout (if timeout-ms (/ timeout-ms 1000.0) 3600)
-                                     (funcall function itm))
-                                 (sb-ext:timeout () "[TIMEOUT]")
-                                 (error (e) (format nil "[ERROR: ~A]" e)))))))
-                        threads)))
-           ;; Wait for results in original order
-           (setf threads (nreverse threads))
-           ;; Join each thread with the remaining timeout budget
-           (loop for thread in threads
-              collect (let ((remaining-secs (when deadline
-                                              (let ((rem (- deadline (get-internal-real-time))))
-                                                (if (<= rem 0) 0.0 (/ (float rem) internal-time-units-per-second))))))
-                        (if (and deadline (<= remaining-secs 0))
-                            (progn
-                              (ignore-errors (sb-thread:terminate-thread thread))
-                              "[TIMEOUT]")
-                            (multiple-value-bind (val status)
-                                (sb-thread:join-thread thread :timeout remaining-secs :default "[TIMEOUT]")
-                              (if (eq status :timeout)
-                                  (progn
-                                    (ignore-errors (sb-thread:terminate-thread thread))
-                                    "[TIMEOUT]")
-                                  val))))))
+           ;; Spawn workers as futures
+           (setf futures
+                 (loop for item in list
+                       collect (let ((itm item))
+                                 (future
+                                   (destructuring-bind (in out err trace debug query term pkg rt) captured-io
+                                     (let ((*standard-input* in)
+                                           (*standard-output* out)
+                                           (*error-output* err)
+                                           (*trace-output* trace)
+                                           (*debug-io* debug)
+                                           (*query-io* query)
+                                           (*terminal-io* term)
+                                           (*package* pkg)
+                                           (*readtable* rt)
+                                           (*in-parallel-context* t))
+                                       (handler-case
+                                           (funcall function itm)
+                                         (error (e) (format nil "[ERROR: ~A]" e)))))))))
+           ;; Await all futures concurrently with the total timeout
+           (let ((timeout-secs (and timeout-ms (/ timeout-ms 1000.0))))
+             (handler-case
+                 (await-all futures :timeout timeout-secs)
+               (future-timeout ()
+                 ;; On timeout, gather completed results and label timed-out ones
+                 (loop for fut in futures
+                       collect (if (sb-thread:thread-alive-p (future-thread fut))
+                                   "[TIMEOUT]"
+                                   (ignore-errors (await fut))))))))
       ;; Ensure all threads are terminated if we exit map-parallel (e.g., via Control-C)
-      (dolist (thread threads)
-        (when (sb-thread:thread-alive-p thread)
-          (ignore-errors (sb-thread:terminate-thread thread)))))))
+      (dolist (fut futures)
+        (let ((thread (and fut (future-thread fut))))
+          (when (and thread (sb-thread:thread-alive-p thread))
+            (ignore-errors (sb-thread:terminate-thread thread))))))))
 
 
 ;;; ---------------------------------------------------------------------------

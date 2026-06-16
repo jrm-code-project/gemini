@@ -74,7 +74,7 @@
                (:file "gemini-core"   :depends-on ("gemini-print" "gemini-openai" "misc" "macros" "object" "package" "vars"))
                (:file "gemini-personas" :depends-on ("functions" "misc"  "mcp" "object" "package" "vars"))
                (:file "gemini-chatbot" :depends-on ("gemini-personas" "misc" "object" "package" "vars"))
-               (:file "gemini-iridium" :depends-on ("misc" "object" "package" "vars"))
+               (:file "gemini-iridium" :depends-on ("macros" "misc" "object" "package" "vars"))
                (:file "gemini"    :depends-on ("functions" "gemini-core" "gemini-print" "gemini-openai" "gemini-personas" "gemini-chatbot" "gemini-iridium" "macros" "mcp" "misc" "object" "package" "vars"))
                (:file "git-tools" :depends-on ("package" "vars"))
                (:file "improve"   :depends-on ("gemini" "misc" "object" "package" "vars"))
