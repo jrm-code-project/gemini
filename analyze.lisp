@@ -139,16 +139,6 @@
     ))
   "LLM prompt detailing the analysis criteria and reporting format for a single Common Lisp top-level form.")
 
-(defun analyze-lisp (form &key package)
-  (declare (ignore package))
-  (gemini-pro
-   (list
-    "The following is a Common Lisp top-level form."
-    (format nil "```lisp~%~a~%```" form)
-    +analyze-form-prompt+)
-   :system-instruction +analyze-file-system-instruction+))
-
-
 (defparameter +analyze-file-system-instruction+
   (str:join #\newline
             (list
@@ -167,6 +157,15 @@
              "For each top-level form:"
              +analyze-form-prompt+))
   "LLM system instruction to analyze a Common Lisp file one top-level form at a time.")
+
+(defun analyze-lisp (form &key package)
+  (declare (ignore package))
+  (gemini-pro
+   (list
+    "The following is a Common Lisp top-level form."
+    (format nil "```lisp~%~a~%```" form)
+    +analyze-form-prompt+)
+   :system-instruction +analyze-file-system-instruction+))
 
 (defparameter +analyze-file-form-prompt+
   (str:join #\Newline

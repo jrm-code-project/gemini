@@ -440,6 +440,10 @@
       (setf (get-thought-signature part) thought-signature))
     part))
 
+(defun thought (text)
+  "Creates a thought part object containing the given TEXT."
+  (part "" :thought text))
+
 (defun schema (&key type format title description
                  (nullable nil nullable-supplied-p)
                  (enum nil enum-supplied-p)

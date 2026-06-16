@@ -85,4 +85,15 @@
                (rotatef +evolvable-system-instruction+ +secondary-evolvable-system-instruction+))))
        (1+ step))))
 
+(defun invert-context (context)
+  "Inverts the roles of 'user' and 'model' in each content object of the given CONTEXT."
+  (mapcar (lambda (content)
+            (let ((role (get-role content)))
+              (cond ((equal role "user")
+                     (setf (get-role content) "model"))
+                    ((equal role "model")
+                     (setf (get-role content) "user")))
+              content))
+          context))
+
 

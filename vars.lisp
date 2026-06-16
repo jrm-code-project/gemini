@@ -308,6 +308,27 @@
 (defun standard-system-instruction (personality)
   (read-system-instruction "standard-system-instruction" personality))
 
+(defparameter +default-model+ "models/gemini-flash-latest"
+  "The default model to use for the Gemini API.
+   This can be overridden by the MODEL keyword argument in `invoke-gemini`.")
+
+(defparameter +turbo-mapping+
+  '((#\$ . "models/gemini-3.1-pro-preview")
+    (#\+ . "models/gemini-3.5-flash")
+    (#\% . "models/gemini-3.1-pro-preview-customtools")
+    (#\* . "models/gemini-pro-latest")
+    (#\- . "models/gemini-flash-lite-latest"))
+  "A mapping of characters to default models.")
+
+(defparameter *enable-personality* t
+  "If non-NIL, the model will answer in the style of a randomly chosen personality.")
+
+(defvar *default-content-generator*)
+(defvar *gemini-flash*)
+(defvar *gemini-flash-lite*)
+(defvar *gemini-pro*)
+(defvar *gemini-uncensored*)
+
 (defun default-system-instruction ()
   "Returns the value of *SYSTEM-INSTRUCTION* if it is bound, otherwise NIL.
    Provides a default system instruction for generation."
@@ -541,6 +562,14 @@
 (defvar *conversation-topic* "a general discussion about miscellaneous topics"
   "Holds the topic for the conversation.")
 
+(defun current-topic ()
+  "Returns the current topic of conversation."
+  *conversation-topic*)
+
+(defun (setf current-topic) (new-value)
+  "Sets the current topic of conversation."
+  (setf *conversation-topic* new-value))
+
 (defvar *tools*)
 (eval-when (:compile-toplevel :load-toplevel :execute)
   (setf (documentation '*tools* 'variable)
@@ -569,6 +598,3 @@
 
 (defparameter *return-text-string* t
   "If non-NIL, return the text string of the candidate instead of the candidate object.")
-
-(defparameter *enable-personality* t
-  "If non-NIL, the model will answer in the style of a randomly chosen personality.")

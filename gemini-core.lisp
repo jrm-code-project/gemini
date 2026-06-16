@@ -2,10 +2,6 @@
 
 (in-package "GEMINI")
 
-(defparameter +default-model+ "models/gemini-flash-latest"
-  "The default model to use for the Gemini API.
-   This can be overridden by the MODEL keyword argument in `invoke-gemini`.")
-
 (defparameter +gemini-api-base-url+
   "https://generativelanguage.googleapis.com/v1beta/"
   "The base URL for the Gemini API endpoints.")
@@ -249,7 +245,8 @@
       *function-declarations*
       ;; Add default function declarations here
       ;; Example:
-      (map 'list #'car (standard-functions-and-handlers))))
+      (when (boundp '*default-content-generator*)
+        (map 'list #'car (standard-functions-and-handlers *default-content-generator*)))))
 
 (defun default-tools ()
   "Returns the value of *TOOLS* if it is bound, otherwise NIL.
@@ -618,13 +615,6 @@
     (when contents
       (content :parts (map 'list #'part contents)
                :role "system"))))
-
-(defparameter  +turbo-mapping+
-  '((#\$ . "models/gemini-3.1-pro-preview")
-    (#\+ . "models/gemini-3.5-flash")
-    (#\% . "models/gemini-3.1-pro-preview-customtools")
-    (#\* . "models/gemini-pro-latest")
-    (#\- . "models/gemini-flash-lite-latest")))
 
 (defun turbo-prompt? (prompt)
   "Returns T/NIL if the prompt should trigger turbo mode based on its first character."

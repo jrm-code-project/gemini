@@ -270,18 +270,18 @@ Does not add values to ALISTS."
 ;;       (member symbol lambda-list-keywords))
 ;;     (scan 'list (sb-introspect:function-lambda-list func)))))
 
-;; (defun function-return-type (func)
-;;   "Returns the return type of a function as a string.
-;;    If the function has no declared return type, it returns NIL."
-;;   (let ((raw-function-type (sb-introspect:function-type func)))
-;;     (and (consp raw-function-type)
-;;          (eq (first raw-function-type) 'function)
-;;          (let ((raw-return-type (third raw-function-type)))
-;;            (if (consp raw-return-type)
-;;                (if (eq (first raw-return-type) 'values)
-;;                    (second raw-return-type)
-;;                    raw-return-type)
-;;                raw-return-type)))))
+(defun function-return-type (func)
+  "Returns the return type of a function as a string.
+   If the function has no declared return type, it returns NIL."
+  (let ((raw-function-type (sb-introspect:function-type func)))
+    (and (consp raw-function-type)
+         (eq (first raw-function-type) 'function)
+         (let ((raw-return-type (third raw-function-type)))
+           (if (consp raw-return-type)
+               (if (eq (first raw-return-type) 'values)
+                   (second raw-return-type)
+                   raw-return-type)
+               raw-return-type)))))
 
 (defun returns-string? (func)
   "Returns T if the function FUNC is declared to return a string."
