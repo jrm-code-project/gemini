@@ -137,6 +137,18 @@ to abandon the task and return immediately to the REPL, leaving the task running
   (:default-initargs :name "Performance Auditor"
    :instruction "You are a cold, hyper-efficient performance critic. Evaluate if the solution will bottleneck under high concurrency or heavy data volumes, and suggest scaling and optimization improvements."))
 
+(defclass goal-evaluator (agent) ()
+  (:default-initargs :name "Goal Evaluator"
+   :instruction "You are a strict, objective evaluator. Determine if the goal is satisfied based on the current context and history. Respond with YES or NO followed by a brief reason."))
+
+(defclass step-planner (agent) ()
+  (:default-initargs :name "Step Planner"
+   :instruction "You are an expert strategic planner. Given the goal and the history of actions taken so far, plan the single most effective next step to advance towards the goal. Output only the actionable step."))
+
+(defclass step-executor (agent) ()
+  (:default-initargs :name "Step Executor"
+   :instruction "You are an action-oriented executor. Given a planned step, simulate or describe its precise execution and the resulting outcome. Report back the observation clearly."))
+
 (defparameter *specialized-auditors*
   (list (make-instance 'auditor :name "OpSec Specialist")
         (make-instance 'auditor :name "Zero-Day Exploit Dev")
@@ -383,3 +395,77 @@ to abandon the task and return immediately to the REPL, leaving the task running
             (finish-output *standard-output*)
             
             (values pro-arg con-arg pro-rebuttal con-rebuttal)))))))
+
+(defun run-autonomous-agent (goal &key (max-iterations 10) (timeout-ms nil))
+  "Orchestrates a standalone autonomous agent process that runs in pursuit of a GOAL.
+   Returns the step and outcome history list."
+  (let* ((start-time (get-internal-real-time))
+         (evaluator (make-instance 'goal-evaluator))
+         (planner (make-instance 'step-planner))
+         (executor (make-instance 'step-executor))
+         (history nil))
+    
+    (labels
+        ((get-real-budget ()
+           (if timeout-ms
+               (- timeout-ms (/ (* (- (get-internal-real-time) start-time) 1000) internal-time-units-per-second))
+               nil))
+         
+         (time-expired-p ()
+           (and timeout-ms (<= (get-real-budget) 0)))
+         
+         (get-safe-budget ()
+           (if timeout-ms (max 1 (get-real-budget)) nil))
+
+         (format-agent-history (hist)
+           (if (null hist)
+               "[No actions taken yet]"
+               (with-output-to-string (s)
+                 (loop for entry in hist
+                       do (format s "  - Iteration ~A:~%    Step Planned: ~A~%    Outcome/Observation: ~A~%"
+                                  (getf entry :iteration)
+                                  (getf entry :step)
+                                  (getf entry :outcome)))))))
+      
+      (loop for iter from 1 to max-iterations
+            do
+            (when (time-expired-p)
+              (format t "~%[!] Autonomous Agent: Time budget exhausted.~%")
+              (return-from run-autonomous-agent history))
+
+            (format t "~%=== Autonomous Agent Iteration ~A ===~%" iter)
+            (finish-output)
+
+            ;; 1. Evaluate Progress
+            (let* ((eval-prompt (format nil "GOAL: ~A~%HISTORY:~%~A~%Is the goal satisfied based on the history? Respond YES or NO followed by a brief reason."
+                                        goal (format-agent-history history)))
+                   (evaluation (if (time-expired-p) "NO - TIMEOUT"
+                                   (invoke evaluator eval-prompt :timeout-ms (get-safe-budget)))))
+              (format t "~%[Evaluator] ~A~%" evaluation)
+              (finish-output)
+
+              (when (and (not (time-expired-p)) (search "YES" (string-upcase evaluation)))
+                (format t "~%[!] Goal achieved in ~A iterations.~%" (1- iter))
+                (return-from run-autonomous-agent history))
+
+              ;; 2. Plan Step
+              (let* ((plan-prompt (format nil "GOAL: ~A~%HISTORY:~%~A~%EVALUATION:~%~A~%Plan the next single step towards achieving the goal."
+                                          goal (format-agent-history history) evaluation))
+                     (next-step (if (time-expired-p) "[TIMEOUT]"
+                                    (invoke planner plan-prompt :timeout-ms (get-safe-budget)))))
+                (format t "~%[Planner] ~A~%" next-step)
+                (finish-output)
+
+                ;; 3. Take Step
+                (let* ((exec-prompt (format nil "STEP TO EXECUTE: ~A~%Describe the precise execution and observation of this step." next-step))
+                       (outcome (if (time-expired-p) "[TIMEOUT]"
+                                    (invoke executor exec-prompt :timeout-ms (get-safe-budget)))))
+                  (format t "~%[Executor] ~A~%" outcome)
+                  (finish-output)
+
+                  ;; Append to history
+                  (setf history (append history (list (list :iteration iter :step next-step :outcome outcome))))))))
+      
+      (format t "~%[!] Max iterations (~A) reached without achieving the goal.~%" max-iterations)
+      (finish-output)
+      history)))

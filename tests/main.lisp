@@ -708,3 +708,53 @@
                  (is (= 1 con-rebuttal-called)))))
         ;; Restore
         (setf gemini::*gemini-flash* orig-flash)))))
+
+(test autonomous-agent-mocked-flow
+  "Test that run-autonomous-agent loops until the goal is satisfied and gathers history."
+  (let* ((eval-called 0)
+         (plan-called 0)
+         (exec-called 0)
+         ;; Mock models
+         (mock-evaluator-model (lambda (parts)
+                                 (declare (ignore parts))
+                                 (incf eval-called)
+                                 (gemini::content :parts (list (part (if (>= eval-called 2) "YES - goal satisfied" "NO - not satisfied yet"))) :role "model")))
+         (mock-planner-model (lambda (parts)
+                               (declare (ignore parts))
+                               (incf plan-called)
+                               (gemini::content :parts (list (part "mock next step")) :role "model")))
+         (mock-executor-model (lambda (parts)
+                                (declare (ignore parts))
+                                (incf exec-called)
+                                (gemini::content :parts (list (part "mock step outcome")) :role "model"))))
+    
+    (let ((orig-flash gemini::*gemini-flash*))
+      (unwind-protect
+           (progn
+             (setf gemini::*gemini-flash* (lambda (parts &key system-instruction &allow-other-keys)
+                                            (cond
+                                              ((and system-instruction (search "strict, objective evaluator" system-instruction))
+                                               (funcall mock-evaluator-model parts))
+                                              ((and system-instruction (search "expert strategic planner" system-instruction))
+                                               (funcall mock-planner-model parts))
+                                              ((and system-instruction (search "action-oriented executor" system-instruction))
+                                               (funcall mock-executor-model parts))
+                                              (t
+                                               (gemini::content :parts (list (part "unknown")) :role "model")))))
+             
+             ;; Silence standard-output to keep terminal spam-free during test
+             (let ((*standard-output* (make-broadcast-stream)))
+               (let ((history (gemini::run-autonomous-agent "Achieve World Peace" :max-iterations 5)))
+                 ;; Verify history accumulation
+                 (is (= 1 (length history)))
+                 (let ((entry (car history)))
+                   (is (= 1 (getf entry :iteration)))
+                   (is (equal "mock next step" (getf entry :step)))
+                   (is (equal "mock step outcome" (getf entry :outcome))))
+                 
+                 ;; Verify invocation counts
+                 (is (= 2 eval-called))
+                 (is (= 1 plan-called))
+                 (is (= 1 exec-called)))))
+        ;; Restore
+        (setf gemini::*gemini-flash* orig-flash)))))
