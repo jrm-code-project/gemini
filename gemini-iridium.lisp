@@ -149,45 +149,72 @@ to abandon the task and return immediately to the REPL, leaving the task running
 ;;; Resilient Synchronized Parallel Concurrency Engine
 ;;; ---------------------------------------------------------------------------
 
-(defun map-parallel (function list &key timeout-ms)
-  "Parallel map using futures with automatic timeout and aggressive cleanup."
+(defun chunk-list (list n)
+  "Splits LIST into sublists of maximum length N."
+  (loop for sub on list by (lambda (l) (nthcdr n l))
+        collect (ldiff sub (nthcdr n sub))))
+
+(defun map-parallel (function list &key timeout-ms (batch-size 4))
+  "Parallel map using futures enqueued and executed in sequential batches of BATCH-SIZE."
   (let* ((captured-io (list *standard-input* *standard-output* *error-output*
                             *trace-output* *debug-io* *query-io* *terminal-io*
                             *package* *readtable*))
-         (futures nil))
+         (batches (chunk-list list batch-size))
+         (results nil)
+         (current-futures nil))
     (unwind-protect
-         (progn
-           ;; Spawn workers as futures
-           (setf futures
-                 (loop for item in list
-                       collect (let ((itm item))
-                                 (future
-                                   (destructuring-bind (in out err trace debug query term pkg rt) captured-io
-                                     (let ((*standard-input* in)
-                                           (*standard-output* out)
-                                           (*error-output* err)
-                                           (*trace-output* trace)
-                                           (*debug-io* debug)
-                                           (*query-io* query)
-                                           (*terminal-io* term)
-                                           (*package* pkg)
-                                           (*readtable* rt)
-                                           (*in-parallel-context* t))
-                                       (handler-case
-                                           (funcall function itm)
-                                         (error (e) (format nil "[ERROR: ~A]" e)))))))))
-           ;; Await all futures concurrently with the total timeout
-           (let ((timeout-secs (and timeout-ms (/ timeout-ms 1000.0))))
-             (handler-case
-                 (await-all futures :timeout timeout-secs)
-               (future-timeout ()
-                 ;; On timeout, gather completed results and label timed-out ones
-                 (loop for fut in futures
-                       collect (if (sb-thread:thread-alive-p (future-thread fut))
-                                   "[TIMEOUT]"
-                                   (ignore-errors (await fut))))))))
-      ;; Ensure all threads are terminated if we exit map-parallel (e.g., via Control-C)
-      (dolist (fut futures)
+         (let ((start-time (get-internal-real-time))
+               (timeout-secs (and timeout-ms (/ timeout-ms 1000.0))))
+           (loop for batch in batches
+                 for elapsed-secs = (/ (- (get-internal-real-time) start-time)
+                                       (float internal-time-units-per-second))
+                 for remaining-timeout-secs = (and timeout-secs (- timeout-secs elapsed-secs))
+                 do
+                 ;; Check if time budget is already exhausted before starting the batch
+                 (when (and timeout-secs (<= remaining-timeout-secs 0))
+                   (error 'future-timeout :future nil :timeout timeout-secs))
+
+                 ;; Spawn workers for the current batch
+                 (setf current-futures
+                       (loop for item in batch
+                             collect (let ((itm item))
+                                       (future
+                                         (destructuring-bind (in out err trace debug query term pkg rt) captured-io
+                                           (let ((*standard-input* in)
+                                                 (*standard-output* out)
+                                                 (*error-output* err)
+                                                 (*trace-output* trace)
+                                                 (*debug-io* debug)
+                                                 (*query-io* query)
+                                                 (*terminal-io* term)
+                                                 (*package* pkg)
+                                                 (*readtable* rt)
+                                                 (*in-parallel-context* t))
+                                             (handler-case
+                                                 (funcall function itm)
+                                               (error (e) (format nil "[ERROR: ~A]" e)))))))))
+
+                 ;; Await completion of the current batch
+                 (handler-case
+                     (let ((batch-results (await-all current-futures :timeout remaining-timeout-secs)))
+                       (setf results (append results batch-results))
+                       (setf current-futures nil)) ; Clear futures after success
+                   (future-timeout ()
+                     ;; On timeout inside await-all, harvest results and terminate
+                     (let ((harvested-results
+                             (loop for fut in current-futures
+                                   collect (if (sb-thread:thread-alive-p (future-thread fut))
+                                               "[TIMEOUT]"
+                                               (ignore-errors (await fut))))))
+                       (setf results (append results harvested-results))
+                       ;; Mark rest of list as "[TIMEOUT]"
+                       (let ((unstarted-count (loop for b in (member batch batches) sum (length b))))
+                         (dotimes (i (- unstarted-count (length batch)))
+                           (setf results (append results (list "[TIMEOUT]")))))
+                       (return results)))))
+           results)
+      ;; Clean up any remaining threads in the current active batch if we exit map-parallel prematurely
+      (dolist (fut current-futures)
         (let ((thread (and fut (future-thread fut))))
           (when (and thread (sb-thread:thread-alive-p thread))
             (ignore-errors (sb-thread:terminate-thread thread))))))))
@@ -207,10 +234,14 @@ to abandon the task and return immediately to the REPL, leaving the task running
 
 (defun compile-audit-report (plan auditors &key timeout-ms)
   "Gathers critiques from all specialized auditors in parallel."
-  (let ((critiques (map-parallel (lambda (auditor)
-                                   (cons (agent-name auditor)
-                                         (invoke auditor plan :timeout-ms timeout-ms)))
-                                 auditors :timeout-ms timeout-ms)))
+  (let* ((max-timeout-ms 300000)
+         (safe-timeout-ms (if timeout-ms
+                              (min timeout-ms max-timeout-ms)
+                              max-timeout-ms))
+         (critiques (map-parallel (lambda (auditor)
+                                    (cons (agent-name auditor)
+                                          (invoke auditor plan :timeout-ms safe-timeout-ms)))
+                                  auditors :timeout-ms safe-timeout-ms)))
     (with-output-to-string (s)
       (format s "--- AUDIT REPORT ---~%")
       (loop for critique in critiques
