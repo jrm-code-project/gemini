@@ -786,3 +786,43 @@
                  (is (= 1 exec-called)))))
         ;; Restore
         (setf gemini::*gemini-flash* orig-flash)))))
+
+(test test-llm-instrumentation-flow
+  "Test that the top-level LLM instrumentation macro and functions accurately track outcomes."
+  (gemini:reset-llm-stats)
+  (let ((stats (gemini:get-llm-stats)))
+    (is (= 0 (getf stats :returned-value)))
+    (is (= 0 (getf stats :returned-nothing)))
+    (is (= 0 (getf stats :aborted))))
+
+  ;; 1. Success case (returns value)
+  (let ((res (gemini:with-llm-instrumentation "value")))
+    (is (equal "value" res))
+    (let ((stats (gemini:get-llm-stats)))
+      (is (= 1 (getf stats :returned-value)))
+      (is (= 0 (getf stats :returned-nothing)))
+      (is (= 0 (getf stats :aborted)))))
+
+  ;; 2. Empty case (returns nil)
+  (let ((res (gemini:with-llm-instrumentation nil)))
+    (is (null res))
+    (let ((stats (gemini:get-llm-stats)))
+      (is (= 1 (getf stats :returned-value)))
+      (is (= 1 (getf stats :returned-nothing)))
+      (is (= 0 (getf stats :aborted)))))
+
+  ;; 3. Abort case (signals error)
+  (signals error
+    (gemini:with-llm-instrumentation
+      (error "Simulated top-level failure")))
+  (let ((stats (gemini:get-llm-stats)))
+    (is (= 1 (getf stats :returned-value)))
+    (is (= 1 (getf stats :returned-nothing)))
+    (is (= 1 (getf stats :aborted))))
+
+  ;; 4. Reset
+  (gemini:reset-llm-stats)
+  (let ((stats (gemini:get-llm-stats)))
+    (is (= 0 (getf stats :returned-value)))
+    (is (= 0 (getf stats :returned-nothing)))
+    (is (= 0 (getf stats :aborted)))))
