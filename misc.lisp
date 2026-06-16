@@ -691,16 +691,31 @@ Does not add values to ALISTS."
                      (future-timeout-future c)
                      (future-timeout-time c)))))
 
+(define-condition future-interrupted (error)
+  ((future :initarg :future :reader future-interrupted-future))
+  (:report (lambda (c s)
+             (format s "Awaiting future ~A was interrupted by user."
+                     (future-interrupted-future c)))))
+
 (defun await (future &key timeout)
   "Joins the thread computing the future's value. If TIMEOUT is specified
    (in seconds), waits up to that amount of time. If the timeout expires,
-   signals a FUTURE-TIMEOUT error."
+   signals a FUTURE-TIMEOUT error. If interrupted by Control-C, stops waiting
+   and signals a FUTURE-INTERRUPTED error, leaving the thread running."
   (check-type future future)
   (let ((timeout-token '#:timeout))
-    (multiple-value-bind (res status)
-        (sb-thread:join-thread (future-thread future)
-                               :timeout timeout
-                               :default timeout-token)
-      (if (eq status :timeout)
-          (error 'future-timeout :future future :timeout timeout)
-          res))))
+    (handler-case
+        (handler-bind ((sb-sys:interactive-interrupt
+                        (lambda (c)
+                          (declare (ignore c))
+                          (error 'future-interrupted :future future))))
+          (multiple-value-bind (res status)
+              (sb-thread:join-thread (future-thread future)
+                                     :timeout timeout
+                                     :default timeout-token)
+            (if (eq status :timeout)
+                (error 'future-timeout :future future :timeout timeout)
+                res)))
+      (sb-sys:interactive-interrupt (c)
+        (declare (ignore c))
+        (error 'future-interrupted :future future)))))

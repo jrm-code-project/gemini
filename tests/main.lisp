@@ -828,7 +828,7 @@
     (is (= 0 (getf stats :aborted)))))
 
 (test test-future-concurrency
-  "Test that the future and await feature evaluates forms in parallel and supports timeouts."
+  "Test that the future and await feature evaluates forms in parallel, supports timeouts, and can be interrupted."
   ;; 1. Normal execution
   (let ((fut (gemini:future (+ 40 2))))
     (is (typep fut 'gemini::future))
@@ -838,4 +838,15 @@
   (let ((fut (gemini:future (sleep 2))))
     (is (typep fut 'gemini::future))
     (signals gemini:future-timeout
-      (gemini:await fut :timeout 0.1))))
+      (gemini:await fut :timeout 0.1)))
+
+  ;; 3. Interrupt error (Control-C simulation)
+  (let ((fut (gemini:future (sleep 5))))
+    (is (typep fut 'gemini::future))
+    (signals gemini:future-interrupted
+      (let ((parent-thread sb-thread:*current-thread*))
+        (sb-thread:make-thread
+         (lambda ()
+           (sleep 0.1)
+           (sb-thread:interrupt-thread parent-thread (lambda () (error 'sb-sys:interactive-interrupt)))))
+        (gemini:await fut)))))

@@ -101,4 +101,5 @@
    "FUTURE"
    "AWAIT"
    "FUTURE-TIMEOUT"
+   "FUTURE-INTERRUPTED"
    ))
