@@ -593,6 +593,7 @@
            (elt (personalities) (mod (+ (absolute-day) *personality-offset*) (length (personalities))))))))
 
 (defun compute-system-instruction-contents (content-generator mood system-instruction)
+  (declare (ignore mood))
   (append
    (or (and system-instruction
             (if (consp system-instruction)

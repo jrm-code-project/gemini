@@ -577,6 +577,7 @@
 
 (defmethod initialize-instance :after ((instance content-generator) &key config &allow-other-keys)
   "Initializes the content generator instance."
+  (declare (ignore config))
   (sb-mop:set-funcallable-instance-function
    instance
    (lambda (prompt &key context mood parts files system-instruction (read-timeout 300) (connect-timeout 60))

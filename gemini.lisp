@@ -35,6 +35,17 @@
          (incf *llm-abort-count*)
          (error e)))))
 
+(defun call-with-model-override (generator model thunk)
+  "Executes THUNK, temporarily overriding the model of the given GENERATOR if MODEL is non-NIL."
+  (if (null model)
+      (funcall thunk)
+      (let ((old-model (get-model generator)))
+        (unwind-protect
+             (progn
+               (setf (get-model generator) model)
+               (funcall thunk))
+          (setf (get-model generator) old-model)))))
+
 (defun content->text (content)
   (if (null content)
       ""
@@ -50,18 +61,24 @@
     (let ((*read-eval* nil))
       (read-from-string (content->text content)))))
 
-(defun invoke-gemini (prompt &key context mood parts files system-instruction (read-timeout 300) (connect-timeout 60))
+(defun invoke-gemini (prompt &key context mood parts files system-instruction model (read-timeout 300) (connect-timeout 60))
   "Invokes the default Gemini persona with the given PROMPT, FILES, and optional SYSTEM-INSTRUCTION."
   (with-llm-instrumentation
-    (generate-content *default-content-generator* context mood prompt parts files system-instruction :read-timeout read-timeout :connect-timeout connect-timeout)))
+    (call-with-model-override *default-content-generator* model
+      (lambda ()
+        (generate-content *default-content-generator* context mood prompt parts files system-instruction :read-timeout read-timeout :connect-timeout connect-timeout)))))
 
-(defun gemini-flash-lite (prompt &key context mood parts files system-instruction (read-timeout 300) (connect-timeout 60))
+(defun gemini-flash-lite (prompt &key context mood parts files system-instruction model (read-timeout 300) (connect-timeout 60))
   (with-llm-instrumentation
-    (generate-content *gemini-flash-lite* context mood prompt parts files system-instruction :read-timeout read-timeout :connect-timeout connect-timeout)))
+    (call-with-model-override *gemini-flash-lite* model
+      (lambda ()
+        (generate-content *gemini-flash-lite* context mood prompt parts files system-instruction :read-timeout read-timeout :connect-timeout connect-timeout)))))
 
-(defun gemini-uncensored (prompt &key context mood parts files system-instruction (connect-timeout 60) (read-timeout 300))
+(defun gemini-uncensored (prompt &key context mood parts files system-instruction model (connect-timeout 60) (read-timeout 300))
   (with-llm-instrumentation
-    (generate-content *gemini-uncensored* context mood prompt parts files system-instruction :read-timeout read-timeout :connect-timeout connect-timeout)))
+    (call-with-model-override *gemini-uncensored* model
+      (lambda ()
+        (generate-content *gemini-uncensored* context mood prompt parts files system-instruction :read-timeout read-timeout :connect-timeout connect-timeout)))))
 
 (defun prompt-predicate (prompt &key context mood parts files system-instruction)
   (let ((ans (content->text
@@ -73,11 +90,13 @@
           ((search "NIL" (string-upcase ans)) nil)
           (t nil))))
 
-(defun gemini-flash (prompt &key context mood parts files system-instruction (read-timeout 300) (connect-timeout 60))
+(defun gemini-flash (prompt &key context mood parts files system-instruction model (read-timeout 300) (connect-timeout 60))
   "Fixed typo in lambda list to ensure timeouts actually pass through."
   (with-llm-instrumentation
-    (generate-content *gemini-flash* context mood prompt parts files system-instruction 
-                      :read-timeout read-timeout :connect-timeout connect-timeout)))
+    (call-with-model-override *gemini-flash* model
+      (lambda ()
+        (generate-content *gemini-flash* context mood prompt parts files system-instruction 
+                          :read-timeout read-timeout :connect-timeout connect-timeout)))))
 
 (defun flash-compress (text)
   (content->text
@@ -87,9 +106,11 @@
  Constraint: Preserve 100% of facts and meaning.
  Output: Raw condensed text only. No preamble. No chatter."))))
 
-(defun gemini-pro (prompt &key context mood parts files system-instruction)
+(defun gemini-pro (prompt &key context mood parts files system-instruction model)
   (with-llm-instrumentation
-    (generate-content *gemini-pro* context mood prompt parts files system-instruction)))
+    (call-with-model-override *gemini-pro* model
+      (lambda ()
+        (generate-content *gemini-pro* context mood prompt parts files system-instruction)))))
 
 (defparameter *compare-files-prompt*
   "Analyze the two provided files and determine their semantic similarity on a scale from 0.0 to 1.0, where 0.0 indicates the files are entirely unrelated and 1.0 indicates they are semantically identical. Output the score as a single real number, excluding all other text, explanations, or commentary.")
