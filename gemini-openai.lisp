@@ -140,7 +140,10 @@
         (when prompt-tokens
           (setf (get-prompt-token-count usage-metadata) prompt-tokens))
         (when completion-tokens
-          (setf (get-candidates-token-count usage-metadata) completion-tokens))
+          (setf (get-candidates-token-count usage-metadata)
+                (if reasoning-tokens
+                    (max 0 (- completion-tokens reasoning-tokens))
+                    completion-tokens)))
         (when reasoning-tokens
           (setf (get-thoughts-token-count usage-metadata) reasoning-tokens))
         (unless (zerop (hash-table-count usage-metadata))

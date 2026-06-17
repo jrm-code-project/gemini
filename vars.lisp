@@ -598,3 +598,6 @@
 
 (defparameter *return-text-string* t
   "If non-NIL, return the text string of the candidate instead of the candidate object.")
+
+(defvar *enable-recursive-prompt* nil
+  "Enables or disables recursive LLM prompting inside tool execution handlers.")

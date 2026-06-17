@@ -568,9 +568,26 @@
     (and (probe-file filepath)
          (file->paragraphs filepath))))
 
+(defclass backend ()
+  ()
+  (:documentation "Abstract base class for all LLM backends."))
+
+(defgeneric invoke-backend (backend model-id payload &key read-timeout connect-timeout &allow-other-keys)
+  (:documentation "Invoke the backend with MODEL-ID and standard Gemini payload.
+   Returns two values: the response object and the usage-metadata object (both in Gemini-style)."))
+
+(defclass gemini-backend (backend)
+  ()
+  (:documentation "Concrete backend implementation for the Google Gemini API."))
+
+(defclass openai-backend (backend)
+  ((url :initarg :url :accessor get-backend-url :initform nil))
+  (:documentation "Concrete backend implementation for OpenAI/LM-Studio APIs."))
+
 (defclass content-generator ()
   ((config :initarg :config :accessor get-config)
-   (memory-mcp-server :reader get-memory-mcp-server))
+   (memory-mcp-server :reader get-memory-mcp-server)
+   (backend :initarg :backend :accessor get-backend))
   
   (:documentation "Class representing a content generator with a persona configuration.")
   (:metaclass sb-mop:funcallable-standard-class))
@@ -585,8 +602,23 @@
 
 (defmethod shared-initialize :after ((instance content-generator) slot-names &key config &allow-other-keys)
   "Initializes the content generator instance."
-  (setf (slot-value instance 'memory-mcp-server)
-        (memory-mcp-server (persona-memory-file config))))
+  (let ((effective-config (or config (get-config instance))))
+    (when effective-config
+      (setf (slot-value instance 'memory-mcp-server)
+            (memory-mcp-server (persona-memory-file effective-config)))
+      (setf (slot-value instance 'backend)
+            (if (get-googleapi effective-config)
+                (make-instance 'gemini-backend)
+                (make-instance 'openai-backend :url (get-url effective-config)))))))
+
+(defmethod get-backend ((object content-generator))
+  (if (and (slot-boundp object 'backend) (slot-value object 'backend))
+      (slot-value object 'backend)
+      (let ((config (get-config object)))
+        (setf (slot-value object 'backend)
+              (if (get-googleapi config)
+                  (make-instance 'gemini-backend)
+                  (make-instance 'openai-backend :url (get-url config)))))))
 
 (defmethod get-bowdlerize ((object content-generator))
   (get-bowdlerize (get-config object)))

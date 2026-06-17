@@ -335,6 +335,26 @@
         (setf (fdefinition 'gemini::%%invoke-openai) orig-invoke-openai)
         (setf (fdefinition 'gemini::openai-response->gemini-response) orig-openai-response->gemini-response)))))
 
+(test openai-usage-translation-and-normalization
+  "Test that openai-usage->gemini-usage correctly extracts token stats and adjusts candidates token count when thoughts are present."
+  (let* ((mock-usage-with-reasoning
+           (gemini::object :prompt_tokens 15
+                           :completion_tokens 120
+                           :completion_tokens_details (gemini::object :reasoning_tokens 80)))
+         (gemini-usage (gemini::openai-usage->gemini-usage mock-usage-with-reasoning)))
+    (is (= 15 (gemini::get-prompt-token-count gemini-usage)))
+    (is (= 80 (gemini::get-thoughts-token-count gemini-usage)))
+    ;; completion_tokens (120) - reasoning_tokens (80) = candidates (40)
+    (is (= 40 (gemini::get-candidates-token-count gemini-usage))))
+
+  (let* ((mock-usage-no-reasoning
+           (gemini::object :prompt_tokens 10
+                           :completion_tokens 50))
+         (gemini-usage (gemini::openai-usage->gemini-usage mock-usage-no-reasoning)))
+    (is (= 10 (gemini::get-prompt-token-count gemini-usage)))
+    (is (null (gemini::get-thoughts-token-count gemini-usage)))
+    (is (= 50 (gemini::get-candidates-token-count gemini-usage)))))
+
 (test token-accounting-thread-safety
   "Test that global token logging is robust and thread-safe under high concurrent contention."
   (let* ((num-threads 10)
@@ -869,3 +889,9 @@
   (let ((fut (gemini:future (error "simulated fatal error"))))
     (signals error (gemini:await fut))
     (signals error (gemini:await fut))))
+
+(test test-project-uroboros
+  "Test that Project Uroboros deploys, runs its cognitive loops, and terminates cleanly."
+  (let ((results (gemini:deploy-uroboros "Write a single sentence about Lisp" :max-iterations 1)))
+    (is (= 1 (length results)))
+    (is (stringp (car results)))))
