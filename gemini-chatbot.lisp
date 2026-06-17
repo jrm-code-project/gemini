@@ -305,7 +305,7 @@ Returns the running thread object."
     (handler-case
         (sb-thread:terminate-thread *heartbeat-thread*)
       (error (e)
-        (format *trace-output* "~&;; WARNING: Failed to terminate heartbeat thread: ~a~%" e))))
+        (log-warn "Failed to terminate heartbeat thread: ~a" e))))
   (setf *heartbeat-thread* nil)
   nil)
 

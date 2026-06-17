@@ -12,14 +12,12 @@
            (,tag-var ,tag))
        (unwind-protect
             (progn
-              (format *trace-output* "~&;; Invoking ~a...~%" ,tag-var)
-              (finish-output *trace-output*)
+              (log-info "Invoking ~a..." ,tag-var)
               (prog1
                   (progn ,@body)
                 (setf ,aborted-var nil)))
          (let ((,elapsed-time-var (local-time:timestamp-difference (local-time:now) ,start-time-var)))
-           (format *trace-output* "~&;; ~a ~:[finished in~;aborted after~] ~,2f seconds.~%" ,tag-var ,aborted-var ,elapsed-time-var)
-           (finish-output *trace-output*))))))
+           (log-info "~a ~:[finished in~;aborted after~] ~,2f seconds." ,tag-var ,aborted-var ,elapsed-time-var))))))
 
 (defmacro future (&body body)
   "Spawns a thread to evaluate BODY, captures any fatal errors, and returns a FUTURE object."

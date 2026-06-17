@@ -33,8 +33,8 @@
   "Preemptively compresses or truncates context to guarantee zero 400 Bad Request / context limits."
   (if (> (length tokens) max-safe)
       (progn
-        (format *trace-output* "~&[Fractal GC] Preemptively compressing KV cache: ~A -> ~A tokens.~%"
-                (length tokens) max-safe)
+        (log-info "[Fractal GC] Preemptively compressing KV cache: ~A -> ~A tokens."
+                  (length tokens) max-safe)
         (subseq tokens (- (length tokens) max-safe)))
       tokens))
 
@@ -81,11 +81,11 @@
         (handler-case
             (sb-thread:terminate-thread memory-thread)
           (error (e)
-            (format *trace-output* "~&[Uroboros] WARNING: Failed to terminate memory thread: ~a~%" e))))
+            (log-warn "[Uroboros] Failed to terminate memory thread: ~a" e))))
       (when (sb-thread:thread-alive-p gc-thread)
         (handler-case
             (sb-thread:terminate-thread gc-thread)
           (error (e)
-            (format *trace-output* "~&[Uroboros] WARNING: Failed to terminate GC thread: ~a~%" e))))
+            (log-warn "[Uroboros] Failed to terminate GC thread: ~a" e))))
       (format t "~&=== SHUTTING DOWN PROJECT UROBOROS MATRIX ===~%")
       (finish-output))))

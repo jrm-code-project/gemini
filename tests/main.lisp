@@ -42,6 +42,23 @@
       (is (search "[ERROR]" output))
       (is (search "boom 42" output)))))
 
+(test report-elapsed-time-logging-facade-integration
+  "Test that report-elapsed-time macro correctly routes timing output through log-info and respects log levels."
+  ;; When log-level is :info, it should show the invoking and finished info
+  (let ((gemini::*log-level* :info))
+    (let ((output (with-output-to-string (*trace-output*)
+                    (gemini::report-elapsed-time "test-action"
+                      (sleep 0.01)))))
+      (is (search "[INFO]" output))
+      (is (search "Invoking test-action..." output))
+      (is (search "test-action finished in" output))))
+  ;; When log-level is :warn, info logs should be suppressed
+  (let ((gemini::*log-level* :warn))
+    (let ((output (with-output-to-string (*trace-output*)
+                    (gemini::report-elapsed-time "test-action"
+                      (sleep 0.01)))))
+      (is (equal "" output)))))
+
 ;;; Test suite for concurrency functions in gemini.lisp
 (def-suite concurrency-tests
   :description "Tests for concurrent utility functions."
