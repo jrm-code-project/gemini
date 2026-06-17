@@ -88,7 +88,13 @@
                          (vector (coerce contents 'list))
                          (t nil)))
          (messages (remove nil (mapcar #'content->openai-message content-list)))
-         (generation-config (get-generation-config payload)))
+         (generation-config (get-generation-config payload))
+         (gemini-tools (get-tools payload))
+         (gemini-tools-list (typecase gemini-tools
+                              (cons gemini-tools)
+                              (vector (coerce gemini-tools 'list))
+                              (t nil)))
+         (openai-tools nil))
 
     ;; Prepend the system instruction if it exists
     (when system-instruction
@@ -97,6 +103,25 @@
             messages))
             
     (let ((openai-payload (object :model model-id :messages messages)))
+
+      ;; Translate tools if present
+      (dolist (tool gemini-tools-list)
+        (let* ((declarations (get-function-declarations tool))
+               (decl-list (typecase declarations
+                            (cons declarations)
+                            (vector (coerce declarations 'list))
+                            (t nil))))
+          (dolist (decl decl-list)
+            (push (object :type "function"
+                          :function (object :name (get-name decl)
+                                            :description (get-description decl)
+                                            :parameters (or (get-parameters decl)
+                                                            (get-parameters-json-schema decl))))
+                  openai-tools))))
+
+      (when openai-tools
+        (setf (get-tools openai-payload) (coerce (nreverse openai-tools) 'vector))
+        (setf (gethash "tool_choice" openai-payload) "auto"))
 
       (when generation-config
         (let ((temperature (get-temperature generation-config))
@@ -164,21 +189,39 @@
                   (lambda (choice)
                     (let* ((message (openai-field choice "message" :message))
                            (role (openai-role->gemini-role (openai-field message "role" :role)))
-                           (raw-content (or (openai-field message "content" :content) ""))
-                           ;; NEW: Extract thoughts if they exist
+                           (raw-content (openai-field message "content" :content))
                            (raw-thoughts (openai-field message "reasoning_content" :reasoning_content :reasoning-content :reasoning--content :reasoning))
-                           (text (if (stringp raw-content)
+                           (text (if (and (stringp raw-content) (not (string= "" raw-content)))
                                      raw-content
-                                     (format nil "~s" (dehashify raw-content))))
-                           ;; Build the parts list properly
-                           (parts (remove nil 
-                                          (list (when (and (stringp raw-thoughts) (not (string= "" raw-thoughts)))
-                                                  (thought raw-thoughts))
-                                                (part text))))
-                           (candidate (object :content (content :role role
-                                                                :parts parts))))
-                      ;; ... (rest of the index and finish-reason logic)
-                      candidate))
+                                     nil))
+                           (tool-calls (openai-field message "tool_calls" :tool_calls :tool-calls :tool--calls))
+                           (tool-call-list (typecase tool-calls
+                                             (cons tool-calls)
+                                             (vector (coerce tool-calls 'list))
+                                             (t nil)))
+                           (function-call-parts
+                             (mapcar
+                              (lambda (tool-call)
+                                (let* ((function-obj (openai-field tool-call "function" :function))
+                                       (name (openai-field function-obj "name" :name))
+                                       (arguments-str (openai-field function-obj "arguments" :arguments))
+                                       (parsed-args (handler-case
+                                                        (with-decoder-jrm-semantics
+                                                          (cl-json:decode-json-from-string arguments-str))
+                                                      (error () (object)))))
+                                  (part (function-call :name name :args parsed-args))))
+                              tool-call-list))
+                           (parts (remove nil
+                                          (append (list (when (and (stringp raw-thoughts) (not (string= "" raw-thoughts)))
+                                                          (thought raw-thoughts))
+                                                        (when text
+                                                          (part text)))
+                                                  function-call-parts))))
+                      (unless parts
+                        (setf parts (list (part ""))))
+                      (let ((candidate (object :content (content :role role
+                                                                           :parts parts))))
+                        candidate)))
                   choice-list))
                (response (object :candidates candidates))
                (usage-metadata (openai-usage->gemini-usage (openai-field data "usage" :usage)))

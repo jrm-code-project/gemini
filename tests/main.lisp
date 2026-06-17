@@ -425,6 +425,60 @@
         ;; Restore
         (setf (fdefinition 'gemini::%%invoke-openai) orig-invoke-openai)))))
 
+(test openai-backend-function-calling-test
+  "Verify that the OpenAI API backend correctly supports function calling by translating tools in the payload and parsing tool_calls in the response."
+  (let* ((config (make-instance 'gemini::persona-config
+                               :name "mock-persona"
+                               :googleapi nil
+                               :enable-misc-tools t
+                               :model "gemma-4-e4b-uncensored"
+                               :url "http://mock-openai-url/v1/chat/completions"))
+         (generator (make-instance 'gemini::content-generator :config config))
+         (called-payload nil)
+         ;; Mock %%invoke-openai to return a tool call
+         (mock-invoke-openai
+           (lambda (model-id payload &key url read-timeout connect-timeout)
+             (declare (ignore model-id url read-timeout connect-timeout))
+             (setf called-payload payload)
+             ;; Return a mock tool call for "machineType"
+             "{\"choices\": [{\"message\": {\"role\": \"assistant\", \"content\": null, \"tool_calls\": [{\"id\": \"call_001\", \"type\": \"function\", \"function\": {\"name\": \"machineType\", \"arguments\": \"{}\"}}]}}], \"usage\": {\"prompt_tokens\": 10, \"completion_tokens\": 20}}")))
+    (let ((orig-invoke-openai #'gemini::%%invoke-openai))
+      (unwind-protect
+           (progn
+             (setf (fdefinition 'gemini::%%invoke-openai) mock-invoke-openai)
+             
+             ;; Execute content generation on the generator
+             ;; We expect the loop to call %%invoke-openai, receive the tool call,
+             ;; execute the "machineType" handler, and then make a second call to %%invoke-openai with the function response!
+             ;; To stop the second call from causing an error, we can make the mock return a normal message on the second call.
+             (let ((call-count 0)
+                   (first-payload nil)
+                   (second-payload nil))
+               (setf (fdefinition 'gemini::%%invoke-openai)
+                     (lambda (model-id payload &key url read-timeout connect-timeout)
+                       (declare (ignore model-id url read-timeout connect-timeout))
+                       (incf call-count)
+                       (if (= call-count 1)
+                           (setf first-payload payload)
+                           (setf second-payload payload))
+                       (setf called-payload payload)
+                       (if (= call-count 1)
+                           "{\"choices\": [{\"message\": {\"role\": \"assistant\", \"content\": null, \"tool_calls\": [{\"id\": \"call_001\", \"type\": \"function\", \"function\": {\"name\": \"machineType\", \"arguments\": \"{}\"}}]}}], \"usage\": {\"prompt_tokens\": 10, \"completion_tokens\": 20}}"
+                           "{\"choices\": [{\"message\": {\"role\": \"assistant\", \"content\": \"The machine type is x86_64.\"}}], \"usage\": {\"prompt_tokens\": 25, \"completion_tokens\": 15}}")))
+               
+               (multiple-value-bind (response usage)
+                   (gemini::generate-content generator nil nil "What is the machine type?" nil nil nil)
+                 (is (= 2 call-count))
+                 ;; Verify tools was correctly populated in the first payload
+                 (is (not (null (gemini::get-tools first-payload))))
+                 (let ((tools-array (gemini::get-tools first-payload)))
+                   (is (> (length tools-array) 0))
+                   (is (equal "function" (gemini::get-type (elt tools-array 0)))))
+                 ;; Verify the final response text
+                 (is (equal "The machine type is x86_64." (content->text response))))))
+        ;; Restore
+        (setf (fdefinition 'gemini::%%invoke-openai) orig-invoke-openai)))))
+
 (test token-accounting-thread-safety
   "Test that global token logging is robust and thread-safe under high concurrent contention."
   (let* ((num-threads 10)
