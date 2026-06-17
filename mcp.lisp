@@ -506,36 +506,11 @@ Safe to call repeatedly."
             (keystring->keyword (car prop)))
         (encode-schema-type (cdr prop))))
 
-(defun normalize-required-field (required)
-  "Normalizes REQUIRED into a flat vector of strings for OpenAI-compatible schemas."
-  (labels ((required-name (item)
-             (cond ((and (vectorp item)
-                         (= (length item) 1))
-                    (required-name (aref item 0)))
-                   ((and (consp item)
-                         (null (cdr item)))
-                    (required-name (car item)))
-          ((keywordp item)
-        (keyword->keystring item))
-          ((symbolp item)
-        (keyword->keystring (intern (symbol-name item) :keyword)))
-          ((stringp item)
-        item)
-                   (t
-        (keyword->keystring (->keyword (format nil "~a" item)))))))
-    (cond ((null required)
-           #())
-          ((vectorp required)
-           (map 'vector #'required-name required))
-          ((listp required)
-           (map 'vector #'required-name required))
-          (t
-           (vector (required-name required))))))
-
 (defun convert-input-schema (input-schema)
   (object :type (get-type input-schema)
           :properties (alist-hash-table (map 'list #'convert-property (hash-table-alist (get-properties input-schema))))
-          :required (normalize-required-field (get-required input-schema))))
+          :required (or (get-required input-schema)
+                        #())))
                               
 (defun transform-description (input-string)
   "Transforms the description string by looking for _ characters, uppercasing the next character, and removing the _."
