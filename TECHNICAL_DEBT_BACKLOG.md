@@ -30,9 +30,9 @@ This backlog converts the recent debt audit into execution-ready work items.
 | TD-008 | P1 | done | Observability | Introduce structured logging facade and route trace output through it | - |
 | TD-009 | P1 | done | Adapter Layer | Unify Gemini/OpenAI payload normalization and validation | TD-003 |
 | TD-010 | P2 | done | Rate Limiting | Improve fixed-delay limiter with 429-aware backoff strategy | - |
-| TD-011 | P2 | ready | API Validation | Add payload validation before transport submission | TD-009 |
-| TD-012 | P2 | blocked | Build Modularity | Reduce coupling in ASDF graph into bounded modules | TD-007, TD-009 |
-| TD-013 | P2 | ready | Observability | Second-pass cleanup: migrate remaining ad hoc trace output to logging facade and normalize severity usage | TD-008 |
+| TD-011 | P2 | done | API Validation | Add payload validation before transport submission | TD-009 |
+| TD-012 | P2 | done | Build Modularity | Reduce coupling in ASDF graph into bounded modules | TD-007, TD-009 |
+| TD-013 | P2 | done | Observability | Second-pass cleanup: migrate remaining ad hoc trace output to logging facade and normalize severity usage | TD-008 |
 
 ---
 
@@ -60,7 +60,7 @@ This backlog converts the recent debt audit into execution-ready work items.
 ### TD-002: Replace silent critical `ignore-errors`
 
 - Priority: P0
-- Status: `ready`
+- Status: `done`
 - Files in scope:
   - `gemini-core.lisp`
   - `gemini-iridium.lisp`
@@ -80,7 +80,7 @@ This backlog converts the recent debt audit into execution-ready work items.
 ### TD-003: Externalize OpenAI auth header
 
 - Priority: P0
-- Status: `ready`
+- Status: `done`
 - Files in scope:
   - `gemini-openai.lisp`
   - `vars.lisp`
@@ -101,7 +101,7 @@ This backlog converts the recent debt audit into execution-ready work items.
 ### TD-004: Repository hygiene cleanup
 
 - Priority: P0
-- Status: `ready`
+- Status: `done`
 - Files in scope:
   - `.gitignore`
   - root backup artifacts (`*~`, `#*#`, etc.)
@@ -118,7 +118,7 @@ This backlog converts the recent debt audit into execution-ready work items.
 ### TD-005: Background thread lifecycle controls
 
 - Priority: P1
-- Status: `ready`
+- Status: `done`
 - Files in scope:
   - `gemini-chatbot.lisp`
   - `gemini-iridium.lisp`
@@ -137,7 +137,7 @@ This backlog converts the recent debt audit into execution-ready work items.
 ### TD-006: Integration test expansion
 
 - Priority: P1
-- Status: `ready`
+- Status: `done`
 - Files in scope:
   - `tests/main.lisp`
   - optional split into `tests/integration/*.lisp`
@@ -230,7 +230,7 @@ This backlog converts the recent debt audit into execution-ready work items.
 ### TD-011: Preflight payload validation
 
 - Priority: P2
-- Status: `ready`
+- Status: `done`
 - Files in scope:
   - `gemini-core.lisp`
   - `gemini-openai.lisp`
@@ -247,7 +247,7 @@ This backlog converts the recent debt audit into execution-ready work items.
 ### TD-012: Modularize ASDF dependency graph
 
 - Priority: P2
-- Status: `blocked`
+- Status: `done`
 - Files in scope:
   - `gemini.asd`
   - package/module files as needed
@@ -263,7 +263,7 @@ This backlog converts the recent debt audit into execution-ready work items.
 ### TD-013: Second-pass logging cleanup and severity normalization
 
 - Priority: P2
-- Status: `ready`
+- Status: `done`
 - Files in scope:
   - `gemini-core.lisp`
   - `gemini-openai.lisp`
@@ -341,9 +341,9 @@ Exit criteria:
 
 ## Preparation Checklist for Each Item
 
-- [ ] Confirm scope and touched files
-- [ ] Define test updates before code changes
-- [ ] Implement smallest safe slice
-- [ ] Run full test suite
-- [ ] Update docs/changelog notes
-- [ ] Mark backlog item status and follow-up tasks
+- [x] Confirm scope and touched files
+- [x] Define test updates before code changes
+- [x] Implement smallest safe slice
+- [x] Run full test suite
+- [x] Update docs/changelog notes
+- [x] Mark backlog item status and follow-up tasks
