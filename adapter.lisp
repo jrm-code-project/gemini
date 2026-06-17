@@ -121,6 +121,8 @@ Supports hash-tables and alists with mixed string/keyword keys."
   (labels ((flatten-required (value)
              (cond ((null value)
                     nil)
+                   ((stringp value)
+                    (list (openai-required-name value)))
                    ((vectorp value)
                     (loop for entry across value append (flatten-required entry)))
                    ((listp value)

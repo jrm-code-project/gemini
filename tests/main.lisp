@@ -615,6 +615,28 @@
     (is (equal "object" (gemini::openai-field parameters :type "type")))
     (is (equal "string" (gemini::openai-field detail-schema :type "type")))))
 
+(test openai-required-field-normalization
+  "Test that OpenAI required fields serialize as strings, not character vectors."
+  (let* ((schema (gemini::schema :type :object
+                                 :properties (gemini::object
+                                              :directory (gemini::schema :type :string)
+                                              :mime-type (gemini::schema :type :string))
+                                 :required (vector :directory :mime-type)))
+         (payload (gemini::object
+                   :tools (vector
+                           (gemini::object
+                            :function-declarations
+                            (vector (gemini::function-declaration
+                                     :name "writeFileBlob"
+                                     :description "Write a blob to a file."
+                                     :parameters schema))))))
+         (openai (gemini::build-openai-payload "mock-model" payload))
+         (tool (elt (gemini::get-tools openai) 0))
+         (function (gemini::openai-field tool :function "function"))
+         (parameters (gemini::openai-field function :parameters "parameters"))
+         (required (gemini::openai-field parameters :required "required")))
+    (is (equalp #("directory" "mimeType") required))))
+
 (test schema-required-field-preservation
   "Test that schema constructors preserve the required field shape for Gemini serialization."
   (let* ((schema (gemini::schema :type :object
