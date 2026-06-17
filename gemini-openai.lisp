@@ -2,14 +2,44 @@
 
 (in-package "GEMINI")
 
+(defun resolve-openai-authorization (&key (authorization-header nil authorization-supplied-p))
+  "Resolves the OpenAI-compatible Authorization header value.
+Resolution order:
+1) Explicit AUTHORIZATION-HEADER argument when supplied.
+2) *OPENAI-AUTHORIZATION* runtime/config value.
+3) OPENAI_AUTHORIZATION environment variable.
+4) OPENAI_API_KEY environment variable (wrapped as Bearer).
+5) Optional local fallback Bearer lm-studio when enabled."
+  (if authorization-supplied-p
+      authorization-header
+      (or (and (boundp '*openai-authorization*)
+               *openai-authorization*)
+          (let ((auth-from-env (uiop:getenv "OPENAI_AUTHORIZATION")))
+            (when (and auth-from-env (> (length auth-from-env) 0))
+              auth-from-env))
+          (let ((api-key (uiop:getenv "OPENAI_API_KEY")))
+            (when (and api-key (> (length api-key) 0))
+              (format nil "Bearer ~a" api-key)))
+          (when (and (boundp '*openai-use-lm-studio-default-authorization*)
+                     *openai-use-lm-studio-default-authorization*)
+            "Bearer lm-studio"))))
+
+(defun openai-request-headers (&key (authorization-header nil authorization-supplied-p))
+  "Builds request headers for OpenAI-compatible chat completion calls."
+  (let ((headers (list (cons "Content-Type" "application/json")))
+        (resolved-auth (if authorization-supplied-p
+                           authorization-header
+                           (resolve-openai-authorization))))
+    (when (and resolved-auth (> (length resolved-auth) 0))
+      (setf headers (append headers (list (cons "Authorization" resolved-auth)))))
+    headers))
+
 (defun %%invoke-openai (model-id payload &key (url "http://localhost:1234/v1/chat/completions") (read-timeout 300) (connect-timeout 60))
   "Invoke a local or OpenAI-compatible backend. No Google-tax required."
   (let ((response 
           (report-elapsed-time (format nil "OpenAI model `~a`" model-id)
                 (dex:post url
-                          :headers '(("Content-Type" . "application/json")
-                                     ;; Even local runners sometimes want a dummy key
-                                     ("Authorization" . "Bearer lm-studio"))
+                          :headers (openai-request-headers)
                           :content (cl-json:encode-json-to-string payload)
                           :read-timeout (or read-timeout 300)
                           :connect-timeout (or connect-timeout 60)))))
@@ -23,78 +53,26 @@
          (content (gethash "content" message)))
     content))
 
-(defun openai-role->gemini-role (role)
-  (cond ((and role (string-equal role "assistant")) "model")
-        ((and role (string-equal role "tool")) "function")
-        ((and role (string-equal role "system")) "user")
-        ((and role (string-equal role "user")) "user")
-        (t "model")))
-
-(defun gemini-role->openai-role (role)
-  (cond ((and role (string-equal role "model")) "assistant")
-        ((and role (string-equal role "function")) "tool")
-        ((and role (string-equal role "system")) "system")
-        ((and role (string-equal role "user")) "user")
-        (t "user")))
+;; Compatibility shims retained while adapter normalization settles.
 
 (defun openai-field (object &rest keys)
-  "Gets the first present key from OBJECT, trying both string and keyword forms."
-  (cond ((hash-table-p object)
-         (dolist (key keys)
-           (let ((value (gethash key object)))
-             (when value
-               (return-from openai-field value)))))
-        ((consp object)
-         (dolist (key keys)
-           (let ((value (assoc key object :test #'equal)))
-             (when value
-               (return-from openai-field (cdr value))))))))
+  (apply #'adapter-field object keys))
 
 (defun part->openai-text (part)
-  "Converts a Gemini part to an OpenAI message text fragment."
-  (cond ((text-part? part) (get-text part))
-        ((function-response-part? part)
-         (format nil "~s" (dehashify (get-function-response part))))
-        ((function-call-part? part)
-         (format nil "~s" (dehashify (get-function-call part))))
-        ((file-data-part? part) "[File data omitted]")
-        ((inline-data-part? part) "[Inline data omitted]")
-        ((executable-code-part? part)
-         (format nil "~s" (dehashify (get-executable-code part))))
-        ((code-execution-result-part? part)
-         (format nil "~s" (dehashify (get-code-execution-result part))))
-        (t nil)))
+  (gemini-part->openai-text part))
 
 (defun content->openai-message (content)
-  "Converts a Gemini content object into one OpenAI chat message object."
-  (let* ((parts (openai-field content :parts "parts"))
-         (part-list (typecase parts
-                      (cons parts)
-                      (vector (coerce parts 'list))
-                      (t nil)))
-         (text-fragments (remove nil (mapcar #'part->openai-text part-list)))
-         (text (if text-fragments
-                   (str:join "\n\n" text-fragments)
-                   "")))
-    (object :role (gemini-role->openai-role (openai-field content :role "role"))
-            :content text)))
+  (gemini-content->openai-message content))
 
 (defun build-openai-payload (model-id payload)
   "Converts a Gemini payload to an OpenAI chat-completions payload."
+  (validate-gemini-payload-shape payload)
   (let* ((contents (get-contents payload))
          (system-instruction (get-system-instruction payload)) ;; Grab the soul
-         (content-list (typecase contents
-                         (cons contents)
-                         (vector (coerce contents 'list))
-                         (t nil)))
-         (messages (remove nil (mapcar #'content->openai-message content-list)))
+         (content-list (adapter-as-list contents))
+         (messages (remove nil (mapcar #'gemini-content->openai-message content-list)))
          (generation-config (get-generation-config payload))
-         (gemini-tools (get-tools payload))
-         (gemini-tools-list (typecase gemini-tools
-                              (cons gemini-tools)
-                              (vector (coerce gemini-tools 'list))
-                              (t nil)))
-         (openai-tools nil))
+         (openai-tools (gemini-tools->openai-tools (get-tools payload))))
 
     ;; Prepend the system instruction if it exists
     (when system-instruction
@@ -104,134 +82,21 @@
             
     (let ((openai-payload (object :model model-id :messages messages)))
 
-      ;; Translate tools if present
-      (dolist (tool gemini-tools-list)
-        (let* ((declarations (get-function-declarations tool))
-               (decl-list (typecase declarations
-                            (cons declarations)
-                            (vector (coerce declarations 'list))
-                            (t nil))))
-          (dolist (decl decl-list)
-            (push (object :type "function"
-                          :function (object :name (get-name decl)
-                                            :description (get-description decl)
-                                            :parameters (or (get-parameters decl)
-                                                            (get-parameters-json-schema decl))))
-                  openai-tools))))
-
       (when openai-tools
-        (setf (get-tools openai-payload) (coerce (nreverse openai-tools) 'vector))
+        (setf (get-tools openai-payload) (coerce openai-tools 'vector))
         (setf (gethash "tool_choice" openai-payload) "auto"))
 
-      (when generation-config
-        (let ((temperature (get-temperature generation-config))
-              (top-p (get-top-p generation-config))
-              (frequency-penalty (get-frequency-penalty generation-config))
-              (presence-penalty (get-presence-penalty generation-config))
-              (max-output-tokens (get-max-output-tokens generation-config))
-              (candidate-count (get-candidate-count generation-config))
-              (stop-sequences (get-stop-sequences generation-config)))
-          (when temperature
-            (setf (get-temperature openai-payload) temperature))
-          (when top-p
-            (setf (get-top-p openai-payload) top-p))
-          (when frequency-penalty
-            (setf (get-frequency-penalty openai-payload) frequency-penalty))
-          (when presence-penalty
-            (setf (get-presence-penalty openai-payload) presence-penalty))
-          (when max-output-tokens
-            (setf (get-max-tokens openai-payload) max-output-tokens))
-          (when candidate-count
-            (setf (get-candidate-count openai-payload) candidate-count))
-          (when stop-sequences
-            (setf (get-stop-sequences openai-payload) stop-sequences))))
+      (apply-gemini-generation-config-to-openai-payload openai-payload generation-config)
       openai-payload)))
-
-(defun openai-usage->gemini-usage (usage)
-  "Normalizes OpenAI usage object fields to Gemini usage metadata keys."
-  (when usage
-    (let* ((prompt-tokens (or (openai-field usage "prompt_tokens" :prompt_tokens :prompt-tokens :prompt--tokens)
-                              (openai-field usage "promptTokens" :promptTokens)
-                              (openai-field usage "input_tokens" :input_tokens)))
-           (completion-tokens (or (openai-field usage "completion_tokens" :completion_tokens :completion-tokens :completion--tokens)
-                                  (openai-field usage "completionTokens" :completionTokens)
-                                  (openai-field usage "total_output_tokens" :response_tokens :responseTokens)))
-           ;; Grab the reasoning details
-           (details (openai-field usage "completion_tokens_details" :completion_tokens_details :completion-tokens-details :completion--tokens--details))
-           (reasoning-tokens (or (openai-field usage "reasoning_tokens" :reasoning_tokens :reasoning-tokens :reasoning--tokens)
-                                 (and (hash-table-p details) 
-                                      (openai-field details "reasoning_tokens" :reasoning_tokens :reasoning-tokens :reasoning--tokens)))))
-      (let ((usage-metadata (object)))
-        (when prompt-tokens
-          (setf (get-prompt-token-count usage-metadata) prompt-tokens))
-        (when completion-tokens
-          (setf (get-candidates-token-count usage-metadata)
-                (if reasoning-tokens
-                    (max 0 (- completion-tokens reasoning-tokens))
-                    completion-tokens)))
-        (when reasoning-tokens
-          (setf (get-thoughts-token-count usage-metadata) reasoning-tokens))
-        (unless (zerop (hash-table-count usage-metadata))
-          usage-metadata)))))
 
 (defun openai-response->gemini-response (json-string)
   "Converts an OpenAI chat response JSON string into Gemini-style response objects."
   (handler-case
       (with-decoder-jrm-semantics
-        (let* ((data (cl-json:decode-json-from-string json-string))
-               (choices (or (openai-field data "choices" :choices) #()))
-               (choice-list (typecase choices
-                              (cons choices)
-                              (vector (coerce choices 'list))
-                              (t nil)))
-               (candidates
-                 (mapcar
-                  (lambda (choice)
-                    (let* ((message (openai-field choice "message" :message))
-                           (role (openai-role->gemini-role (openai-field message "role" :role)))
-                           (raw-content (openai-field message "content" :content))
-                           (raw-thoughts (openai-field message "reasoning_content" :reasoning_content :reasoning-content :reasoning--content :reasoning))
-                           (text (if (and (stringp raw-content) (not (string= "" raw-content)))
-                                     raw-content
-                                     nil))
-                           (tool-calls (openai-field message "tool_calls" :tool_calls :tool-calls :tool--calls))
-                           (tool-call-list (typecase tool-calls
-                                             (cons tool-calls)
-                                             (vector (coerce tool-calls 'list))
-                                             (t nil)))
-                           (function-call-parts
-                             (mapcar
-                              (lambda (tool-call)
-                                (let* ((function-obj (openai-field tool-call "function" :function))
-                                       (name (openai-field function-obj "name" :name))
-                                       (arguments-str (openai-field function-obj "arguments" :arguments))
-                                       (parsed-args (handler-case
-                                                        (with-decoder-jrm-semantics
-                                                          (cl-json:decode-json-from-string arguments-str))
-                                                      (error () (object)))))
-                                  (part (function-call :name name :args parsed-args))))
-                              tool-call-list))
-                           (parts (remove nil
-                                          (append (list (when (and (stringp raw-thoughts) (not (string= "" raw-thoughts)))
-                                                          (thought raw-thoughts))
-                                                        (when text
-                                                          (part text)))
-                                                  function-call-parts))))
-                      (unless parts
-                        (setf parts (list (part ""))))
-                      (let ((candidate (object :content (content :role role
-                                                                           :parts parts))))
-                        candidate)))
-                  choice-list))
-               (response (object :candidates candidates))
-               (usage-metadata (openai-usage->gemini-usage (openai-field data "usage" :usage)))
-               (model-name (or (openai-field data "model" :model)
-                               (openai-field data "model_name" :model_name :model-name :model--name))))
-          (when model-name
-            (setf (get-model-version response) model-name))
-          (values response usage-metadata)))
+        (openai-response-hash->gemini-response
+         (cl-json:decode-json-from-string json-string)))
     (error (c)
-      (format *trace-output* "~&;; WARNING: Failed to decode OpenAI response: ~a~%" c)
+      (log-warn "Failed to decode OpenAI response: ~a" c)
       (values (object :candidates (list (object :content (content :role "model"
                                                                   :parts (list (part json-string))))))
               nil))))

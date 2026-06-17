@@ -25,6 +25,23 @@
   (is (equal "fooBar" (gemini::keyword->keystring :foo-bar)))
   )
 
+(test logging-facade-level-filtering
+  "Test that log level threshold suppresses lower-priority messages."
+  (let ((gemini::*log-level* :warn))
+    (let ((output (with-output-to-string (*trace-output*)
+                    (gemini::log-info "info hidden")
+                    (gemini::log-warn "warn shown"))))
+      (is (not (search "info hidden" output)))
+      (is (search "warn shown" output)))))
+
+(test logging-facade-formatting
+  "Test that facade emits level prefix and formatted payload."
+  (let ((gemini::*log-level* :debug))
+    (let ((output (with-output-to-string (*trace-output*)
+                    (gemini::log-error "boom ~a" 42))))
+      (is (search "[ERROR]" output))
+      (is (search "boom 42" output)))))
+
 ;;; Test suite for concurrency functions in gemini.lisp
 (def-suite concurrency-tests
   :description "Tests for concurrent utility functions."
@@ -285,6 +302,25 @@
       (is (search "Hello world" output))
       (is (not (search "secret" output))))))
 
+(test print-text-strips-thought-tags
+  "Test that print-text removes <thought>...</thought> tags during paragraph reflow."
+  (let* ((response (gemini::object
+                    :candidates
+                    (list (gemini::object
+                           :content (gemini::content
+                                     :role "model"
+                                     :parts (list (part "Line 1 with <thought>internal reasoning here</thought> continues.\nLine 2.")))))))
+         (output (with-output-to-string (*trace-output*)
+                   (gemini::print-text nil response))))
+    ;; Should have "Line 1" and "Line 2"
+    (is (search "Line 1" output))
+    (is (search "Line 2" output))
+    ;; Should NOT have the thought content or tags
+    (is (not (search "thought" output)))
+    (is (not (search "internal reasoning" output)))
+    (is (not (search "<thought>" output)))
+    (is (not (search "</thought>" output)))))
+
 ;;; Test suite for gemini-core functions
 (def-suite gemini-core-tests
   :description "Tests for gemini-core functions."
@@ -308,6 +344,26 @@
   
   ;; 3. Redact full string
   (is (equal "hello [REDACTED] world" (gemini::redact "hello xYz9pQrSlKjGwV world"))))
+
+(test generation-recursion-hard-limit
+  "Ensure %generate-content aborts deterministically at the configured hard recursion limit."
+  (is (= 32 gemini::+max-generation-recursion-depth+))
+  (signals gemini::generation-recursion-limit-exceeded
+    (gemini::%generate-content nil nil nil "noop" nil nil nil nil 32)))
+
+(test generation-recursion-hard-limit-continuable
+  "Ensure continuing the hard-limit condition extends the active recursion limit by 32."
+  (let ((gemini::*generation-recursion-hard-limit* gemini::+max-generation-recursion-depth+))
+    (handler-bind ((gemini::generation-recursion-limit-exceeded
+                     (lambda (c)
+                       (declare (ignore c))
+                       (let ((restart (find-restart 'continue)))
+                         (when restart
+                           (invoke-restart restart))))))
+      (gemini::ensure-generation-recursion-budget! 32))
+    (is (= (+ gemini::+max-generation-recursion-depth+
+              gemini::+generation-recursion-depth-extension+)
+           gemini::*generation-recursion-hard-limit*))))
 
 (test openai-timeout-propagation
   "Verify that %invoke-gemini successfully propagates read and connect timeouts to %%invoke-openai."
@@ -335,6 +391,91 @@
         (setf (fdefinition 'gemini::%%invoke-openai) orig-invoke-openai)
         (setf (fdefinition 'gemini::openai-response->gemini-response) orig-openai-response->gemini-response)))))
 
+(test gemini-rate-limit-backoff-grows-exponentially
+  "Test that 429 backoff penalty grows exponentially and updates backoff-until."
+  (let ((gemini::+gemini-backoff-base-seconds+ 2)
+        (gemini::+gemini-backoff-max-seconds+ 8)
+        (gemini::+gemini-backoff-jitter-max-seconds+ 0)
+        (gemini::*gemini-backoff-jitter-function* (lambda (max-jitter-seconds)
+                                                    (declare (ignore max-jitter-seconds))
+                                                    0)))
+    (gemini::reset-gemini-rate-limit-backoff!)
+    (gemini::register-gemini-rate-limit-hit!)
+    (is (= 2 gemini::*gemini-rate-limit-penalty-seconds*))
+    (let ((first-until gemini::*gemini-rate-limit-backoff-until*))
+      (gemini::register-gemini-rate-limit-hit!)
+      (is (= 4 gemini::*gemini-rate-limit-penalty-seconds*))
+      (is (>= gemini::*gemini-rate-limit-backoff-until* first-until)))))
+
+(test invoke-gemini-retries-on-429
+  "Test that %%invoke-gemini retries when a 429 error is encountered."
+  (let ((orig-google-post #'google:google-post)
+        (orig-rate-limit #'gemini::gemini-rate-limit)
+        (calls 0)
+        (gemini::+gemini-rate-limit-max-retries+ 3)
+        (gemini::+gemini-backoff-base-seconds+ 0)
+        (gemini::+gemini-backoff-max-seconds+ 0)
+        (gemini::+gemini-backoff-jitter-max-seconds+ 0)
+        (gemini::*gemini-backoff-jitter-function* (lambda (max-jitter-seconds)
+                                                    (declare (ignore max-jitter-seconds))
+                                                    0)))
+    (unwind-protect
+         (progn
+           (setf (fdefinition 'gemini::gemini-rate-limit)
+                 (lambda (&key timeout-ms model-id)
+                   (declare (ignore timeout-ms model-id))
+                   nil))
+           (setf (fdefinition 'google:google-post)
+                 (lambda (&rest args)
+                   (declare (ignore args))
+                   (incf calls)
+                   (if (= calls 1)
+                       (error "HTTP 429 Too Many Requests")
+                       (gemini::object :candidates
+                                       (list (gemini::object :content (gemini::content :role "model" :parts (list (part "ok")))))))))
+           (let ((response (gemini::%%invoke-gemini "models/gemini-flash-latest" (gemini::object))))
+             (is (= 2 calls))
+             (is (gemini::get-candidates response))))
+      (setf (fdefinition 'google:google-post) orig-google-post)
+      (setf (fdefinition 'gemini::gemini-rate-limit) orig-rate-limit))))
+
+(test invoke-gemini-does-not-retry-non-429
+  "Test that %%invoke-gemini does not retry non-429 transport errors."
+  (let ((orig-google-post #'google:google-post)
+        (orig-rate-limit #'gemini::gemini-rate-limit)
+        (calls 0))
+    (unwind-protect
+         (progn
+           (setf (fdefinition 'gemini::gemini-rate-limit)
+                 (lambda (&key timeout-ms model-id)
+                   (declare (ignore timeout-ms model-id))
+                   nil))
+           (setf (fdefinition 'google:google-post)
+                 (lambda (&rest args)
+                   (declare (ignore args))
+                   (incf calls)
+                   (error "HTTP 500 Server Error")))
+           (signals error
+             (gemini::%%invoke-gemini "models/gemini-flash-latest" (gemini::object)))
+           (is (= 1 calls)))
+      (setf (fdefinition 'google:google-post) orig-google-post)
+      (setf (fdefinition 'gemini::gemini-rate-limit) orig-rate-limit))))
+
+(test openai-request-headers-explicit-override
+  "Ensure explicit header override controls Authorization emission deterministically."
+  (let ((headers-without-auth (gemini::openai-request-headers :authorization-header nil))
+        (headers-with-auth (gemini::openai-request-headers :authorization-header "Bearer test-token")))
+    (is (equal "application/json" (cdr (assoc "Content-Type" headers-without-auth :test #'equal))))
+    (is (null (assoc "Authorization" headers-without-auth :test #'equal)))
+    (is (equal "Bearer test-token" (cdr (assoc "Authorization" headers-with-auth :test #'equal))))))
+
+(test openai-request-headers-runtime-config-precedence
+  "Ensure runtime config variable is used for OpenAI Authorization header resolution."
+  (let ((gemini::*openai-authorization* "Bearer runtime-config-token")
+        (gemini::*openai-use-lm-studio-default-authorization* nil))
+    (let ((headers (gemini::openai-request-headers)))
+      (is (equal "Bearer runtime-config-token" (cdr (assoc "Authorization" headers :test #'equal)))))))
+
 (test openai-usage-translation-and-normalization
   "Test that openai-usage->gemini-usage correctly extracts token stats and adjusts candidates token count when thoughts are present."
   (let* ((mock-usage-with-reasoning
@@ -354,6 +495,126 @@
     (is (= 10 (gemini::get-prompt-token-count gemini-usage)))
     (is (null (gemini::get-thoughts-token-count gemini-usage)))
     (is (= 50 (gemini::get-candidates-token-count gemini-usage)))))
+
+(test generate-content-thin-loop-hits-hard-limit
+  "Test that repeated thin responses trigger recursive reinvocation until the hard limit is reached."
+  (let ((orig-invoke #'gemini::%invoke-gemini)
+        (gemini::*generation-recursion-hard-limit* 2)
+        (gemini::*echo-result* nil))
+    (unwind-protect
+         (progn
+           (setf (fdefinition 'gemini::%invoke-gemini)
+                 (lambda (content-generator model-id payload &key read-timeout connect-timeout)
+                   (declare (ignore content-generator model-id payload read-timeout connect-timeout))
+                   (values
+                    (gemini::object :candidates
+                                    (list (gemini::object :content (gemini::content :role "model" :parts (list (part ""))))))
+                    (gemini::object :prompt-token-count 1 :candidates-token-count 0))))
+           (signals gemini::generation-recursion-limit-exceeded
+                        (gemini::%generate-content gemini::*gemini-flash* nil nil "thin loop" nil nil nil nil 0)))
+      (setf (fdefinition 'gemini::%invoke-gemini) orig-invoke))))
+
+(test generate-content-function-call-loop-hits-hard-limit
+  "Test that repeated function-call recursion paths share the same hard recursion budget."
+  (let ((orig-invoke #'gemini::%invoke-gemini)
+        (gemini::*generation-recursion-hard-limit* 2)
+        (gemini::*echo-result* nil)
+        (gemini::*trace-function-calls* nil))
+    (unwind-protect
+         (progn
+           (setf (fdefinition 'gemini::%invoke-gemini)
+                 (lambda (content-generator model-id payload &key read-timeout connect-timeout)
+                   (declare (ignore content-generator model-id payload read-timeout connect-timeout))
+                   (values
+                    (gemini::object
+                     :candidates
+                     (list (gemini::object
+                            :content (gemini::content :role "model"
+                                                      :parts (list (part (gemini::function-call :name "missing_fn"
+                                                                                                :args (gemini::object))))))))
+                    (gemini::object :prompt-token-count 1 :candidates-token-count 1))))
+           (signals gemini::generation-recursion-limit-exceeded
+             (gemini::%generate-content gemini::*gemini-flash* nil nil "function loop" nil nil nil nil 0)))
+      (setf (fdefinition 'gemini::%invoke-gemini) orig-invoke))))
+
+(test generate-content-mixed-loop-hits-hard-limit
+  "Test that mixed thin-response and function-call recursion paths share one hard recursion budget."
+  (let ((orig-invoke #'gemini::%invoke-gemini)
+        (calls 0)
+        (gemini::*generation-recursion-hard-limit* 2)
+        (gemini::*echo-result* nil)
+        (gemini::*trace-function-calls* nil))
+    (unwind-protect
+         (progn
+           (setf (fdefinition 'gemini::%invoke-gemini)
+                 (lambda (content-generator model-id payload &key read-timeout connect-timeout)
+                   (declare (ignore content-generator model-id payload read-timeout connect-timeout))
+                   (incf calls)
+                   (if (= calls 1)
+                       ;; First response is thin (no candidate tokens) to trigger thin-response recursion.
+                       (values
+                        (gemini::object :candidates
+                                        (list (gemini::object :content (gemini::content :role "model"
+                                                                                       :parts (list (part ""))))))
+                        (gemini::object :prompt-token-count 1 :candidates-token-count 0))
+                       ;; Second response is function-call output to trigger tool recursion on same budget.
+                       (values
+                        (gemini::object
+                         :candidates
+                         (list (gemini::object
+                                :content (gemini::content :role "model"
+                                                          :parts (list (part (gemini::function-call :name "missing_fn"
+                                                                                                    :args (gemini::object))))))))
+                        (gemini::object :prompt-token-count 1 :candidates-token-count 1)))))
+           (signals gemini::generation-recursion-limit-exceeded
+             (gemini::%generate-content gemini::*gemini-flash* nil nil "mixed loop" nil nil nil nil 0))
+           (is (= 2 calls)))
+      (setf (fdefinition 'gemini::%invoke-gemini) orig-invoke))))
+
+(test build-openai-payload-translation-invariants
+  "Test that system instruction and tool declarations are translated into OpenAI payload fields."
+  (let* ((payload (gemini::object
+                   :contents (list (gemini::content :role "user" :parts (list (part "hello"))))
+                   :system-instruction (gemini::content :role "system" :parts (list (part "sys")))
+                   :tools (vector
+                           (gemini::object
+                            :function-declarations
+                            (vector (gemini::function-declaration
+                                     :name "machineType"
+                                     :description "returns machine type"
+                                     :parameters (gemini::object :type "object")))))))
+         (openai (gemini::build-openai-payload "mock-model" payload))
+         (messages (gemini::get-messages openai))
+         (tools (gemini::get-tools openai)))
+    (is (equal "mock-model" (gemini::get-model openai)))
+    (is (>= (length messages) 2))
+    (is (equal "system" (gemini::openai-field (elt messages 0) :role "role")))
+    (is (equal "sys" (gemini::openai-field (elt messages 0) :content "content")))
+    (is (not (null tools)))
+    (is (> (length tools) 0))
+    (is (equal "function" (gemini::get-type (elt tools 0))))))
+
+(test adapter-openai-response-normalization
+  "Test shared adapter normalization for OpenAI responses and usage aliases."
+  (let* ((decoded (jsonx:with-decoder-jrm-semantics
+                    (cl-json:decode-json-from-string
+                     "{\"model_name\":\"adapter-model\",\"choices\":[{\"finish_reason\":\"stop\",\"message\":{\"role\":\"assistant\",\"content\":\"adapter reply\"}}],\"usage\":{\"promptTokens\":7,\"completion_tokens\":31,\"completion_tokens_details\":{\"reasoning_tokens\":11}}}")))
+         (response nil)
+         (usage nil))
+    (multiple-value-setq (response usage)
+      (gemini::openai-response-hash->gemini-response decoded))
+    (is (equal "adapter-model" (gemini::get-model-version response)))
+    (is (equal "adapter reply"
+               (gemini::content->text (gemini::get-content (elt (gemini::get-candidates response) 0)))))
+    (is (= 7 (gemini::get-prompt-token-count usage)))
+    (is (= 11 (gemini::get-thoughts-token-count usage)))
+    (is (= 20 (gemini::get-candidates-token-count usage)))))
+
+(test adapter-payload-preflight-validation
+  "Test shared adapter payload validation rejects non-content entries."
+  (signals error
+    (gemini::validate-gemini-payload-shape
+     (gemini::object :contents (list "not-content")))))
 
 (test gemini-backend-mock-test
   "Test the gemini-backend CLOS implementation with mocked %%invoke-gemini responses."
@@ -425,6 +686,40 @@
         ;; Restore
         (setf (fdefinition 'gemini::%%invoke-openai) orig-invoke-openai)))))
 
+(test gemini-backend-safety-block-test
+  "Verify that invoke-backend signals an error when Gemini blocks output for safety/guideline reasons."
+  (let* ((backend (make-instance 'gemini::gemini-backend))
+         (mock-payload (gemini::object :contents (list (gemini::content :role "user" :parts (list (part "hello"))))))
+         (mock-response (gemini::object :prompt-feedback (gemini::object :block-reason "SAFETY")
+                                        :candidates (list (gemini::object :content (gemini::content :role "model" :parts (list (part "")))))))
+         (mock-invoke-gemini (lambda (model-id payload &key read-timeout connect-timeout)
+                               (declare (ignore model-id payload read-timeout connect-timeout))
+                               mock-response)))
+    (let ((orig-invoke-gemini #'gemini::%%invoke-gemini))
+      (unwind-protect
+           (progn
+             (setf (fdefinition 'gemini::%%invoke-gemini) mock-invoke-gemini)
+             (signals gemini::gemini-api-error
+               (gemini::invoke-backend backend "mock-gemini-model" mock-payload)))
+        (setf (fdefinition 'gemini::%%invoke-gemini) orig-invoke-gemini)))))
+
+(test openai-backend-content-filter-stop-test
+  "Verify that invoke-backend signals an error when OpenAI-compatible responses stop due to content filtering/guidelines."
+  (let* ((backend (make-instance 'gemini::openai-backend :url "http://mock-url/v1/chat/completions"))
+         (mock-payload (gemini::object :contents (list (gemini::content :role "user" :parts (list (part "hello"))))))
+         (mock-response-json
+           "{\"choices\": [{\"finish_reason\": \"content_filter\", \"message\": {\"role\": \"assistant\", \"content\": \"\"}}], \"usage\": {\"prompt_tokens\": 2, \"completion_tokens\": 0}}")
+         (mock-invoke-openai (lambda (model-id payload &key url read-timeout connect-timeout)
+                               (declare (ignore model-id payload url read-timeout connect-timeout))
+                               mock-response-json)))
+    (let ((orig-invoke-openai #'gemini::%%invoke-openai))
+      (unwind-protect
+           (progn
+             (setf (fdefinition 'gemini::%%invoke-openai) mock-invoke-openai)
+             (signals gemini::gemini-api-error
+               (gemini::invoke-backend backend "mock-openai-model" mock-payload)))
+        (setf (fdefinition 'gemini::%%invoke-openai) orig-invoke-openai)))))
+
 (test openai-backend-function-calling-test
   "Verify that the OpenAI API backend correctly supports function calling by translating tools in the payload and parsing tool_calls in the response."
   (let* ((config (make-instance 'gemini::persona-config
@@ -434,12 +729,11 @@
                                :model "gemma-4-e4b-uncensored"
                                :url "http://mock-openai-url/v1/chat/completions"))
          (generator (make-instance 'gemini::content-generator :config config))
-         (called-payload nil)
          ;; Mock %%invoke-openai to return a tool call
          (mock-invoke-openai
            (lambda (model-id payload &key url read-timeout connect-timeout)
              (declare (ignore model-id url read-timeout connect-timeout))
-             (setf called-payload payload)
+             (declare (ignore payload))
              ;; Return a mock tool call for "machineType"
              "{\"choices\": [{\"message\": {\"role\": \"assistant\", \"content\": null, \"tool_calls\": [{\"id\": \"call_001\", \"type\": \"function\", \"function\": {\"name\": \"machineType\", \"arguments\": \"{}\"}}]}}], \"usage\": {\"prompt_tokens\": 10, \"completion_tokens\": 20}}")))
     (let ((orig-invoke-openai #'gemini::%%invoke-openai))
@@ -452,22 +746,20 @@
              ;; execute the "machineType" handler, and then make a second call to %%invoke-openai with the function response!
              ;; To stop the second call from causing an error, we can make the mock return a normal message on the second call.
              (let ((call-count 0)
-                   (first-payload nil)
-                   (second-payload nil))
+                   (first-payload nil))
                (setf (fdefinition 'gemini::%%invoke-openai)
                      (lambda (model-id payload &key url read-timeout connect-timeout)
                        (declare (ignore model-id url read-timeout connect-timeout))
                        (incf call-count)
                        (if (= call-count 1)
-                           (setf first-payload payload)
-                           (setf second-payload payload))
-                       (setf called-payload payload)
+                           (setf first-payload payload))
                        (if (= call-count 1)
                            "{\"choices\": [{\"message\": {\"role\": \"assistant\", \"content\": null, \"tool_calls\": [{\"id\": \"call_001\", \"type\": \"function\", \"function\": {\"name\": \"machineType\", \"arguments\": \"{}\"}}]}}], \"usage\": {\"prompt_tokens\": 10, \"completion_tokens\": 20}}"
                            "{\"choices\": [{\"message\": {\"role\": \"assistant\", \"content\": \"The machine type is x86_64.\"}}], \"usage\": {\"prompt_tokens\": 25, \"completion_tokens\": 15}}")))
                
                (multiple-value-bind (response usage)
                    (gemini::generate-content generator nil nil "What is the machine type?" nil nil nil)
+                 (declare (ignore usage))
                  (is (= 2 call-count))
                  ;; Verify tools was correctly populated in the first payload
                  (is (not (null (gemini::get-tools first-payload))))
@@ -482,7 +774,6 @@
 (test model-objects-and-registry
   "Verify that model objects can be created, registered, found, and are automatically enforced in persona-config and agent slots."
   (let* ((mock-model-id "models/mock-model-123")
-         (mock-model-name "mock-model-123")
          (model-obj (gemini::ensure-model mock-model-id)))
     ;; 1. Check basic model object properties
     (is (typep model-obj 'gemini::model))
@@ -695,6 +986,129 @@
   :description "Tests for gemini-iridium functions."
   :in all-tests)
 
+(def-suite gemini-chatbot-tests
+  :description "Integration-flavored tests for chatbot state and conversation isolation."
+  :in all-tests)
+
+(in-suite gemini-chatbot-tests)
+
+(test chatbot-conversation-isolation
+  "Test that separate chatbot instances maintain independent conversation state."
+  (let ((orig-generate-content #'gemini::generate-content))
+    (unwind-protect
+         (progn
+           (setf (fdefinition 'gemini::generate-content)
+                 (lambda (content-generator context mood prompt parts files system-instruction &key read-timeout connect-timeout)
+                   (declare (ignore content-generator context mood parts files system-instruction read-timeout connect-timeout))
+                   (gemini::content :role "model" :parts (list (part (format nil "reply: ~a" prompt))))))
+           (let* ((bot-a (gemini::chatbot gemini::*gemini-flash*))
+                  (bot-b (gemini::chatbot gemini::*gemini-flash*))
+                  (agent-a (funcall bot-a :agent!))
+                  (agent-b (funcall bot-b :agent!)))
+             (funcall bot-a "alpha")
+             (funcall bot-b "beta")
+             (is (not (eq agent-a agent-b)))
+             (is (search "alpha"
+                         (gemini::content->text
+                          (car (last (gemini::conversational-agent-conversation agent-a) 2)))))
+             (is (search "beta"
+                         (gemini::content->text
+                          (car (last (gemini::conversational-agent-conversation agent-b) 2)))))
+             (is (not (search "beta"
+                              (gemini::content->text
+                               (car (last (gemini::conversational-agent-conversation agent-a) 2))))))
+             (is (not (search "alpha"
+                              (gemini::content->text
+                               (car (last (gemini::conversational-agent-conversation agent-b) 2))))))))
+      (setf (fdefinition 'gemini::generate-content) orig-generate-content))))
+
+(test continue-gemini-with-session-isolation
+  "Test that explicit runtime sessions isolate continue-gemini context state."
+  (let ((orig-generate-content #'gemini::generate-content))
+    (unwind-protect
+         (progn
+           (setf (fdefinition 'gemini::generate-content)
+                 (lambda (content-generator context mood prompt parts files system-instruction &key read-timeout connect-timeout)
+                   (declare (ignore content-generator context mood parts files system-instruction read-timeout connect-timeout))
+                   (gemini::content :role "model" :parts (list (part (format nil "reply: ~a" prompt))))))
+           (let ((session-a (gemini:make-runtime-session))
+                 (session-b (gemini:make-runtime-session)))
+             (let ((res-a (gemini::continue-gemini-with-session session-a "alpha"))
+                   (res-b (gemini::continue-gemini-with-session session-b "beta")))
+               (declare (ignore res-a res-b))
+               (let ((context-a (gemini:runtime-session-context session-a))
+                 (context-b (gemini:runtime-session-context session-b)))
+                 (is (gemini::list-of-content? context-a))
+                 (is (gemini::list-of-content? context-b))
+                 (is (search "alpha" (gemini::content->text (car (last context-a)))))
+                 (is (search "beta" (gemini::content->text (car (last context-b)))))
+                 (is (not (search "beta" (gemini::content->text (car (last context-a))))))
+                 (is (not (search "alpha" (gemini::content->text (car (last context-b))))))))))
+      (setf (fdefinition 'gemini::generate-content) orig-generate-content))))
+
+(test runtime-session-topic-isolation
+  "Test that current-topic reads/writes the active runtime session state."
+  (let ((session-a (gemini:make-runtime-session :conversation-topic "topic-a"))
+        (session-b (gemini:make-runtime-session :conversation-topic "topic-b")))
+    (gemini:with-runtime-session (session-a)
+      (is (equal "topic-a" (gemini:current-topic)))
+      (setf (gemini:current-topic) "topic-a-updated")
+      (is (equal "topic-a-updated" (gemini:current-topic))))
+    (gemini:with-runtime-session (session-b)
+      (is (equal "topic-b" (gemini:current-topic))))
+    (is (equal "topic-a-updated" (gemini:runtime-session-conversation-topic session-a)))
+    (is (equal "topic-b" (gemini:runtime-session-conversation-topic session-b)))))
+
+(test chat-with-session-default-persona-fallback
+  "Test that chat-with-session works without explicit persona/session initialization."
+  (let ((orig-generate-content #'gemini::generate-content))
+    (unwind-protect
+         (progn
+           (setf (fdefinition 'gemini::generate-content)
+                 (lambda (content-generator context mood prompt parts files system-instruction &key read-timeout connect-timeout)
+                   (declare (ignore content-generator context mood parts files system-instruction read-timeout connect-timeout))
+                   (gemini::content :role "model" :parts (list (part (format nil "reply: ~a" prompt))))))
+           (let* ((session (gemini:make-runtime-session))
+                  (gemini::*chat-persona* nil)
+                  (result (gemini::chat-with-session session "hello")))
+             (declare (ignore result))
+             (is (functionp (gemini::runtime-session-chat-persona session)))
+             (is (gemini::list-of-content? (gemini:runtime-session-context session)))
+             (is (search "reply: hello"
+                         (gemini::content->text
+                          (car (last (gemini:runtime-session-context session))))))))
+      (setf (fdefinition 'gemini::generate-content) orig-generate-content))))
+
+        (test new-chat-tolerates-unbound-model
+          "Test that new-chat works when legacy *model* special is unbound."
+          (let ((orig-reload-persona #'gemini::reload-persona)
+            (old-current-session gemini::*current-session*)
+            (old-chat-persona gemini::*chat-persona*)
+            (model-was-bound (boundp 'gemini::*model*))
+            (old-model (when (boundp 'gemini::*model*) gemini::*model*)))
+            (unwind-protect
+             (progn
+               (setf (fdefinition 'gemini::reload-persona)
+                 (lambda (persona-name prompt)
+               (declare (ignore persona-name prompt))
+               (lambda (input &rest keys)
+                 (declare (ignore input keys))
+                 nil)))
+               (when model-was-bound
+             (makunbound 'gemini::*model*))
+               (setf gemini::*current-session* nil
+                 gemini::*chat-persona* nil)
+               (is (null (gemini:new-chat "Mock" "hello")))
+               (is (typep gemini::*current-session* 'gemini:runtime-session))
+               (is (null (gemini:runtime-session-model gemini::*current-session*)))
+               (is (functionp gemini::*chat-persona*)))
+          (setf (fdefinition 'gemini::reload-persona) orig-reload-persona)
+          (setf gemini::*current-session* old-current-session
+            gemini::*chat-persona* old-chat-persona)
+          (if model-was-bound
+              (setf gemini::*model* old-model)
+              (ignore-errors (makunbound 'gemini::*model*))))))
+
 (in-suite gemini-iridium-tests)
 
 (test auditor-uncensored-model
@@ -777,6 +1191,38 @@
     (signals error
       (gemini::with-abandonable-task (:name "Error Test")
         (error "background threat simulated")))))
+
+(test heartbeat-thread-lifecycle-idempotent
+  "Test explicit start/stop lifecycle controls for heartbeat thread are idempotent."
+  (let ((original-interval gemini::*heartbeat-interval-seconds*))
+    (unwind-protect
+         (progn
+           (gemini::stop-heartbeat-thread)
+           (is (null (gemini::heartbeat-thread-alive-p)))
+
+           (let ((thread-1 (gemini::start-heartbeat-thread :interval-seconds 1))
+                 (thread-2 (gemini::start-heartbeat-thread :interval-seconds 1)))
+             (is (eq thread-1 thread-2))
+             (is (gemini::heartbeat-thread-alive-p)))
+
+           (gemini::stop-heartbeat-thread)
+           (is (null (gemini::heartbeat-thread-alive-p)))
+
+           ;; Stopping again should be a no-op
+           (gemini::stop-heartbeat-thread)
+           (is (null gemini::*heartbeat-thread*)))
+      ;; Keep default runtime behavior after test.
+      (gemini::start-heartbeat-thread :interval-seconds original-interval))))
+
+(test mcp-stop-servers-idempotent
+  "Test MCP server shutdown helper can be called repeatedly without errors."
+  (let ((saved-servers gemini::*mcp-servers*))
+    (unwind-protect
+         (progn
+           (setf gemini::*mcp-servers* nil)
+           (finishes (gemini::stop-mcp-servers))
+           (finishes (gemini::stop-mcp-servers)))
+      (setf gemini::*mcp-servers* saved-servers))))
 
 (test scheme-and-critique-mocked-flow
   "Test adversarial loop recursion depth and chaos verification flow using mock models."

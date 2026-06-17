@@ -2,6 +2,11 @@
 
 (in-package "GEMINI")
 
+(defun strip-thought-tags (text)
+  "Removes all <thought>...</thought> tags from TEXT.
+   Returns the text with all thought tags and their contents removed."
+  (cl-ppcre:regex-replace-all "<thought>[\\s\\S]*?</thought>" text ""))
+
 (defun process-thought (thought)
   "Processes a thought part object.
    If the thought is a text part, it formats the text and outputs it to *trace-output*."
@@ -156,9 +161,10 @@
                   (if (not (text-part? (car parts)))
                       (next-part (cdr parts))
                       (let* ((text (get-text (car parts)))
-                             (clean-text (if bowdlerize
-                                             (cl-ppcre:regex-replace-all bowdlerize text "")
-                                             text)))
+                             (bowdlerized-text (if bowdlerize
+                                                   (cl-ppcre:regex-replace-all bowdlerize text "")
+                                                   text))
+                             (clean-text (strip-thought-tags bowdlerized-text)))
                         (let process-lines ((lines (str:split #\Newline clean-text))
                                             (in-code-p nil)
                                             (text-buffer nil))

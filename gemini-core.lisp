@@ -14,6 +14,38 @@
                      (gemini-error-code c) 
                      (gemini-error-message c)))))
 
+(define-condition generation-recursion-limit-exceeded (error)
+  ((depth :initarg :depth :reader recursion-depth)
+   (limit :initarg :limit :reader recursion-limit))
+  (:report (lambda (c s)
+             (format s "Generation recursion depth (~d) reached hard limit (~d)."
+                     (recursion-depth c)
+                     (recursion-limit c)))))
+
+(defparameter +max-generation-recursion-depth+ 32
+  "Hard limit for recursive generation reinvocations in %generate-content.")
+
+(defparameter +generation-recursion-depth-extension+ 32
+  "How many additional recursive levels to allow after continuing a hard-limit error.")
+
+(defvar *generation-recursion-hard-limit* +max-generation-recursion-depth+
+  "Dynamically scoped active recursion hard limit for the current generation run.")
+
+(defun ensure-generation-recursion-budget! (depth)
+  "Signals a continuable hard-limit error when DEPTH reaches the active recursion limit.
+Continuing extends the active recursion limit by +generation-recursion-depth-extension+."
+  (when (>= depth *generation-recursion-hard-limit*)
+    (restart-case
+        (error 'generation-recursion-limit-exceeded
+               :depth depth
+               :limit *generation-recursion-hard-limit*)
+      (continue ()
+        :report (lambda (s)
+                  (format s "Continue and extend recursion limit by ~d (new limit: ~d)."
+                          +generation-recursion-depth-extension+
+                          (+ *generation-recursion-hard-limit* +generation-recursion-depth-extension+)))
+        (incf *generation-recursion-hard-limit* +generation-recursion-depth-extension+)))))
+
 (defun list-models (&optional page-token)
   "Lists available models from the Gemini API."
   (let ((response
@@ -40,6 +72,68 @@
 (defvar *gemini-timer-lock* (sb-thread:make-mutex :name "gemini-timer-lock"))
 (defparameter *next-invoke-gemini-time* (get-universal-time))
 
+(defparameter +gemini-backoff-base-seconds+ 1
+  "Base delay in seconds for 429 backoff.")
+
+(defparameter +gemini-backoff-max-seconds+ 60
+  "Maximum delay in seconds for 429 backoff.")
+
+(defparameter +gemini-backoff-jitter-max-seconds+ 1
+  "Maximum jitter range in seconds added to 429 backoff.")
+
+(defparameter +gemini-rate-limit-max-retries+ 3
+  "Maximum number of retry attempts after a 429 rate-limit response.")
+
+(defvar *gemini-rate-limit-penalty-seconds* 0
+  "Current adaptive penalty in seconds for 429 backoff handling.")
+
+(defvar *gemini-rate-limit-backoff-until* 0
+  "Universal-time second until which requests should be delayed due to 429 responses.")
+
+(defvar *gemini-backoff-jitter-function*
+  (lambda (max-jitter-seconds)
+    (if (and max-jitter-seconds (> max-jitter-seconds 0))
+        (random (1+ max-jitter-seconds))
+        0))
+  "Function returning jitter seconds for adaptive backoff.")
+
+(defun reset-gemini-rate-limit-backoff! ()
+  "Resets adaptive 429 backoff state to its baseline."
+  (sb-thread:with-mutex (*gemini-timer-lock*)
+    (setf *gemini-rate-limit-penalty-seconds* 0
+          *gemini-rate-limit-backoff-until* 0))
+  nil)
+
+(defun register-gemini-rate-limit-hit! ()
+  "Updates adaptive backoff state after a 429 response."
+  (let ((now (get-universal-time)))
+    (sb-thread:with-mutex (*gemini-timer-lock*)
+      (setf *gemini-rate-limit-penalty-seconds*
+            (if (<= *gemini-rate-limit-penalty-seconds* 0)
+                +gemini-backoff-base-seconds+
+                (min +gemini-backoff-max-seconds+
+                     (* 2 *gemini-rate-limit-penalty-seconds*))))
+      (let* ((jitter (max 0 (funcall *gemini-backoff-jitter-function*
+                                     +gemini-backoff-jitter-max-seconds+)))
+             (new-until (+ now *gemini-rate-limit-penalty-seconds* jitter)))
+        (setf *gemini-rate-limit-backoff-until*
+              (max *gemini-rate-limit-backoff-until* new-until)
+              *next-invoke-gemini-time*
+              (max *next-invoke-gemini-time* *gemini-rate-limit-backoff-until*))))
+    (log-warn "Gemini API rate-limited (429). Applying adaptive backoff of ~ds (until ~d)."
+              *gemini-rate-limit-penalty-seconds*
+              *gemini-rate-limit-backoff-until*))
+  nil)
+
+(defun gemini-rate-limit-error-429-p (condition)
+  "Returns true when CONDITION appears to represent an HTTP 429 response."
+  (or (let ((too-many-symbol (find-symbol "HTTP-REQUEST-TOO-MANY-REQUESTS" "DEXADOR.ERROR")))
+        (and too-many-symbol
+             (ignore-errors (typep condition too-many-symbol))))
+      (let ((message (string-upcase (princ-to-string condition))))
+        (or (search "429" message)
+            (search "TOO MANY REQUESTS" message)))))
+
 (defun gemini-rate-limit (&key (timeout-ms nil) (model-id ""))
   "Thread-safe rate limiting with Atomic Reservation and Budget Awareness."
   (let* ((offset (cond ((search "flash-lite" model-id) 1)
@@ -49,12 +143,17 @@
          (wait-time 0))
     (sb-thread:with-mutex (*gemini-timer-lock*)
       ;; Calculate wait based on the CURRENTLY RESERVED time
-      (setf wait-time (max 0 (- *next-invoke-gemini-time* now)))
+      (setf wait-time (max 0 (- (max *next-invoke-gemini-time*
+                                     *gemini-rate-limit-backoff-until*)
+                                now)))
       ;; ABORT if the wait exceeds our remaining budget
       (when (and timeout-ms (> (* wait-time 1000) timeout-ms))
         (error "Rate-limit wait (~As) exceeds remaining budget (~Ams)." wait-time timeout-ms))
       ;; RESERVE the next slot IMMEDIATELY (Atomic Reservation)
-      (setf *next-invoke-gemini-time* (+ (max now *next-invoke-gemini-time*) offset)))
+      (setf *next-invoke-gemini-time* (+ (max now
+                                              *next-invoke-gemini-time*
+                                              *gemini-rate-limit-backoff-until*)
+                                         offset)))
     
     ;; Sleep OUTSIDE the lock so we don't block other threads from reserving slots
     (when (> wait-time 0)
@@ -63,15 +162,30 @@
 
 (defun %%invoke-gemini (model-id payload &key (read-timeout 300) (connect-timeout 60) (total-timeout-ms nil))
   "Internal helper with staggered rate limiting."
-  (gemini-rate-limit :timeout-ms total-timeout-ms :model-id model-id)
-  (report-elapsed-time (format nil "Gemini API model `~a`" model-id)
-    (sb-ext:with-timeout (or read-timeout 300)
-      (google:google-post
-       (concatenate 'string +gemini-api-base-url+ model-id ":generateContent")
-       (google:gemini-api-key)
-       payload
-       :read-timeout (or read-timeout 60)
-       :connect-timeout (or connect-timeout 300)))))
+  (let ((attempt 0))
+    (labels ((invoke-loop ()
+               (gemini-rate-limit :timeout-ms total-timeout-ms :model-id model-id)
+               (handler-case
+                   (let ((response
+                           (report-elapsed-time (format nil "Gemini API model `~a`" model-id)
+                             (sb-ext:with-timeout (or read-timeout 300)
+                               (google:google-post
+                                (concatenate 'string +gemini-api-base-url+ model-id ":generateContent")
+                                (google:gemini-api-key)
+                                payload
+                                :read-timeout (or read-timeout 60)
+                                :connect-timeout (or connect-timeout 300))))))
+                     (reset-gemini-rate-limit-backoff!)
+                     response)
+                 (error (e)
+                   (if (and (gemini-rate-limit-error-429-p e)
+                            (< attempt +gemini-rate-limit-max-retries+))
+                       (progn
+                         (incf attempt)
+                         (register-gemini-rate-limit-hit!)
+                         (invoke-loop))
+                       (error e))))))
+      (invoke-loop))))
 
 (defvar *gemini-token-lock* (sb-thread:make-mutex :name "gemini-token-lock"))
 
@@ -79,6 +193,61 @@
   "Accumulated prompt token count across multiple API calls.")
 (defvar *accumulated-response-tokens* 0
   "Accumulated response token count across multiple API calls.")
+
+(defun response-field (object &rest keys)
+  "Returns the first present field value from OBJECT for any of KEYS.
+Handles keyword and string key variants." 
+  (apply #'adapter-field object keys))
+
+(defun blocked-stop-reason-p (reason)
+  "True when REASON indicates safety/policy filtering or a blocked response."
+  (when reason
+    (let ((reason* (string-upcase (princ-to-string reason))))
+      (or (search "SAFETY" reason*)
+          (search "CONTENT_FILTER" reason*)
+          (search "CONTENT-FILTER" reason*)
+          (search "BLOCKLIST" reason*)
+          (search "PROHIBITED" reason*)
+          (search "SPII" reason*)
+          (search "MODEL_ARMOR" reason*)
+          (search "POLICY" reason*)))))
+
+(defun %as-list (value)
+  (adapter-as-list value))
+
+(defun assert-response-not-blocked (response)
+  "Signals GEMINI-API-ERROR if RESPONSE indicates safety/policy blocking."
+  (unless (hash-table-p response)
+    (return-from assert-response-not-blocked nil))
+
+  (let* ((prompt-feedback (response-field response
+                                         :prompt-feedback "promptFeedback" :promptFeedback "prompt_feedback"))
+         (block-reason (and prompt-feedback
+                            (response-field prompt-feedback
+                                            :block-reason "blockReason" :blockReason "block_reason"))))
+    (when (and block-reason
+               (not (string-equal "BLOCK_REASON_UNSPECIFIED" (princ-to-string block-reason))))
+      (error 'gemini-api-error
+             :code 403
+             :message (format nil "Response blocked by safety/guidelines (prompt block reason: ~a)." block-reason))))
+
+  (loop for candidate in (%as-list (get-candidates response))
+        for idx from 0
+        do (let ((finish-reason (response-field candidate
+                                                :finish-reason "finishReason" :finishReason "finish_reason")))
+             (when (blocked-stop-reason-p finish-reason)
+               (error 'gemini-api-error
+                      :code 403
+                      :message (format nil "Candidate ~d blocked by safety/guidelines (finish reason: ~a)."
+                                       idx finish-reason))))
+           (dolist (rating (%as-list (response-field candidate
+                                                    :safety-ratings "safetyRatings" :safetyRatings "safety_ratings")))
+             (when (response-field rating :blocked "blocked")
+               (let ((category (response-field rating :category "category")))
+                 (error 'gemini-api-error
+                        :code 403
+                        :message (format nil "Candidate ~d blocked by safety ratings~@[ (~a)~]."
+                                         idx category)))))))
 
 (defun process-usage-metadata (usage-metadata)
   "Processes usage metadata from the API response.
@@ -114,6 +283,7 @@
         (error 'gemini-api-error
                :code (get-code err)
                :message (get-message err)))
+      (assert-response-not-blocked response)
       (when usage-metadata
         (process-usage-metadata usage-metadata))
       (values (strip-and-print-thoughts response)
@@ -131,6 +301,7 @@
                                    "http://localhost:1234/v1/chat/completions")
                           :read-timeout read-timeout
                           :connect-timeout connect-timeout))
+      (assert-response-not-blocked response)
       (when usage-metadata
         (process-usage-metadata usage-metadata))
       (values response usage-metadata))))
@@ -167,7 +338,7 @@
             (declare (ignore uri stream))
             (if (>= status 400)
                 (progn
-                  (format *trace-output* "~&;; WARNING: file->part got HTTP ~d for URL: ~a~%" status path)
+                  (log-warn "file->part got HTTP ~d for URL: ~a" status path)
                   nil)
                 (let* ((content-type (or (gethash "content-type" headers) "application/octet-stream"))
                        (clean-mime (car (str:split ";" content-type))) ;; Strip charset info
@@ -187,7 +358,7 @@
           ;; Handle Local Files
           (if (not (probe-file path))
               (progn
-                (format *trace-output* "~&;; WARNING: file->part could not find local file: ~a~%" path)
+                (log-warn "file->part could not find local file: ~a" path)
                 nil)
               (let ((mime-type* (if (string-equal "application/json" mime-type) ;; Gemini bug.
                                     "text/plain"
@@ -199,7 +370,7 @@
                       :data (file->blob path)
                       :mime-type mime-type*))))))
     (error (e)
-      (format *trace-output* "~&;; ERROR: file->part failed to process ~a: ~a~%" path e)
+      (log-error "file->part failed to process ~a: ~a" path e)
       nil)))
 
 (defun expand-pathname (file)
@@ -394,8 +565,7 @@
            (handler (and entry (cdr entry)))
            (arglist (default-process-args args schema)))
       (when *trace-function-calls*
-        (format *trace-output* "~&;; Invoking function: ~a(~{~s~^, ~})~%" name arglist)
-        (force-output *trace-output*))
+        (log-debug "Invoking function: ~a(~{~s~^, ~})" name arglist))
       (let ((response
               (object :function-response
                       (object 
@@ -439,8 +609,7 @@
                                                       :standard-output output-string
                                                       :error-output error-string))))))))))
         (when *trace-function-calls*
-          (format *trace-output* "~&;; Function call response: ~s~%" (dehashify response))
-          (force-output *trace-output*))
+          (log-debug "Function call response: ~s" (dehashify response)))
         response))))
 
 (defparameter *include-model* nil 
@@ -731,20 +900,23 @@
   FILES: Optional list of file specifications to include in the prompt.  Not concatenated to the context.
   SYSTEM-INSTRUCTION: Optional system instruction content to guide the model's response.
 "
-  (cond ((and (consp prompt) (eq (car prompt) :set-model!))
-         (setf (get-model content-generator) (cadr prompt)))
-        ((turbo-prompt? prompt)
-         (%generate-content content-generator
-                            context mood (subseq prompt 1) parts files system-instruction (char prompt 0) 0
-                            :read-timeout read-timeout :connect-timeout connect-timeout))
-        (t
-         (%generate-content content-generator
-                            context mood prompt parts files system-instruction nil 0
-                                                        :read-timeout read-timeout :connect-timeout connect-timeout))))
+  (let ((*generation-recursion-hard-limit* +max-generation-recursion-depth+))
+    (cond ((and (consp prompt) (eq (car prompt) :set-model!))
+           (setf (get-model content-generator) (cadr prompt)))
+          ((turbo-prompt? prompt)
+           (%generate-content content-generator
+                              context mood (subseq prompt 1) parts files system-instruction (char prompt 0) 0
+                              :read-timeout read-timeout :connect-timeout connect-timeout))
+          (t
+           (%generate-content content-generator
+                              context mood prompt parts files system-instruction nil 0
+                              :read-timeout read-timeout :connect-timeout connect-timeout)))))
 (defvar *echo-result* t
   "If true, the content created by %generate-content will be printed to *standard-output*.")
 
 (defun %generate-content (content-generator context mood prompt parts files system-instruction turbo depth &key (read-timeout 300) (connect-timeout 60))
+
+  (ensure-generation-recursion-budget! depth)
 
   (when (= (mod depth 16) 15)
     (cerror "Continue content generation" "Possible infinite loop in content generation."))
@@ -777,8 +949,9 @@
                            (< (or (get-thoughts-token-count usage-metadata) 0) 10000)
                            (< (or (get-candidates-token-count usage-metadata) 0) 2)
                            (< depth 5))
-                  (format *trace-output* "~&;; Response has lots of thoughts (~a tokens) but very little content (~a token~:*~P). Continuing prompt.~%" (get-thoughts-token-count usage-metadata)
-                          (get-candidates-token-count usage-metadata))
+                  (log-info "Response has lots of thoughts (~a tokens) but very little content (~a token~:*~P). Continuing prompt."
+                      (get-thoughts-token-count usage-metadata)
+                      (get-candidates-token-count usage-metadata))
                   (return-from %generate-content
                     (let* ((content (or (get-content first-candidate)
                                         (content :parts (list (part "[Empty Response]"))))))
@@ -796,7 +969,7 @@
 
 
                 (unless (> (or (get-candidates-token-count usage-metadata) 0) 0)
-                  (format *trace-output* "~&;; Response too thin, retrying with stronger model.~%")
+                  (log-warn "Response too thin, retrying with stronger model.")
                   (return-from %generate-content
                     (let* ((content (or (get-content first-candidate)
                                         (content :parts (list (part "[Empty Response]"))))))
@@ -855,11 +1028,15 @@
     (when (probe-file memory-pathname)
       (let ((memory-json nil))
         ;; Extract json
-        (ignore-errors
-         (with-open-file (stream memory-pathname :direction :input)
-           (do ((json (cl-json:decode-json stream) (cl-json:decode-json stream)))
-               ((null json) nil)
-             (push json memory-json))))
+        (handler-case
+            (with-open-file (stream memory-pathname :direction :input)
+              (do ((json (cl-json:decode-json stream) (cl-json:decode-json stream)))
+                  ((null json) nil)
+                (push json memory-json)))
+          (error (e)
+              (log-warn "Failed to read persona memory ~a: ~a"
+                  memory-pathname e)
+            (setf memory-json nil)))
         (with-open-file (out-stream compressed-memory-pathname
                                     :direction :output
                                     :if-exists :supersede

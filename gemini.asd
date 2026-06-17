@@ -24,7 +24,8 @@
                "trivial-backtrace"
                "trivial-timeout"
                "uiop")
-  :components ((:file "analyze"   :depends-on ("gemini" "object" "package" "vars"))
+  :components ((:file "adapter"   :depends-on ("misc" "object" "package" "vars"))
+               (:file "analyze"   :depends-on ("gemini" "object" "package" "vars"))
                (:file "asdfx"     :depends-on ("package"))
                (:file "blogger"   :depends-on ("gemini" "object" "package" "vars"))
                ;; loads last
@@ -70,8 +71,8 @@
                                                "vars"
                                                "web-tools"))
                (:file "gemini-print" :depends-on ("misc" "object" "package" "vars"))
-               (:file "gemini-openai" :depends-on ( "macros" "misc" "object" "package" "vars"))
-               (:file "gemini-core"   :depends-on ("gemini-print" "gemini-openai" "misc" "macros" "object" "package" "vars"))
+               (:file "gemini-openai" :depends-on ("adapter" "macros" "misc" "object" "package" "vars"))
+               (:file "gemini-core"   :depends-on ("adapter" "gemini-print" "gemini-openai" "misc" "macros" "object" "package" "vars"))
                (:file "gemini-personas" :depends-on ("functions" "misc"  "mcp" "object" "package" "vars"))
                (:file "gemini-chatbot" :depends-on ("gemini-personas" "misc" "object" "package" "vars"))
                (:file "gemini-iridium" :depends-on ("macros" "misc" "object" "package" "vars"))

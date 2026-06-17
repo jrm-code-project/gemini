@@ -127,6 +127,8 @@
   :thoughts-token-count
   :title
   :tool-config
+  :tool-calls
+  :tool-choice
   :tools
   :top-k
   :top-p
@@ -137,6 +139,10 @@
   :uri
   :uri-template
   :usage-metadata
+  :prompt-tokens
+  :completion-tokens
+  :completion-tokens-details
+  :reasoning-tokens
   :version)
 
 (define-field :type %get-type)

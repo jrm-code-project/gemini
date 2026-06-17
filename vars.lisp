@@ -604,11 +604,13 @@
 
 (defun current-topic ()
   "Returns the current topic of conversation."
-  *conversation-topic*)
+  (runtime-session-conversation-topic (ensure-runtime-session)))
 
 (defun (setf current-topic) (new-value)
   "Sets the current topic of conversation."
-  (setf *conversation-topic* new-value))
+  (let ((session (ensure-runtime-session)))
+    (setf (runtime-session-conversation-topic session) new-value)
+    (setf *conversation-topic* new-value)))
 
 (defvar *tools*)
 (eval-when (:compile-toplevel :load-toplevel :execute)
@@ -632,9 +634,90 @@
 (eval-when (:compile-toplevel :load-toplevel :execute)
   (setf (documentation '*model* 'variable) "Holds the model name or identifier for the API."))
 
+(defvar *openai-authorization* nil)
+(eval-when (:compile-toplevel :load-toplevel :execute)
+  (setf (documentation '*openai-authorization* 'variable)
+        "Optional full Authorization header value for OpenAI-compatible backends, e.g. \"Bearer <token>\"."))
+
+(defvar *openai-use-lm-studio-default-authorization* nil)
+(eval-when (:compile-toplevel :load-toplevel :execute)
+  (setf (documentation '*openai-use-lm-studio-default-authorization* 'variable)
+        "When non-NIL, use \"Bearer lm-studio\" as final fallback for OpenAI-compatible requests."))
+
 (defparameter *prior-model* nil
   "Holds the prior model name or identifier for the API.
    This is used to maintain context across multiple API calls, especially for multi-turn conversations.")
+
+(defclass runtime-session ()
+  ((context :initarg :context :accessor runtime-session-context :initform '())
+   (prior-context :initarg :prior-context :accessor runtime-session-prior-context :initform '())
+   (model :initarg :model :accessor runtime-session-model :initform nil)
+   (prior-model :initarg :prior-model :accessor runtime-session-prior-model :initform nil)
+   (chat-persona :initarg :chat-persona :accessor runtime-session-chat-persona :initform nil)
+   (default-persona-chatbot :initarg :default-persona-chatbot
+                            :accessor runtime-session-default-persona-chatbot
+                            :initform nil)
+   (conversation-topic :initarg :conversation-topic :accessor runtime-session-conversation-topic
+                       :initform "a general discussion about miscellaneous topics"))
+  (:documentation "Explicit runtime state container used to reduce reliance on global specials."))
+
+(defvar *current-session* nil
+  "The default runtime session object used by compatibility wrappers.")
+
+(defun make-runtime-session (&key (context '())
+                                  (prior-context '())
+                                  (model nil)
+                                  (prior-model nil)
+                                  (conversation-topic "a general discussion about miscellaneous topics"))
+  "Constructs a new runtime-session object."
+  (make-instance 'runtime-session
+                 :context context
+                 :prior-context prior-context
+                 :model model
+                 :prior-model prior-model
+                 :conversation-topic conversation-topic))
+
+(defun ensure-runtime-session (&optional session)
+  "Returns SESSION if provided, otherwise ensures and returns *CURRENT-SESSION*."
+  (or session
+      *current-session*
+      (setf *current-session* (make-runtime-session
+                               :context (if (boundp '*context*) *context* nil)
+                               :prior-context (if (boundp '*prior-context*) *prior-context* nil)
+                               :model (if (boundp '*model*) *model* nil)
+                               :prior-model (if (boundp '*prior-model*) *prior-model* nil)
+                               :conversation-topic (if (boundp '*conversation-topic*)
+                                                       *conversation-topic*
+                                                       "a general discussion about miscellaneous topics")))))
+
+(defun sync-session-from-globals (&optional (session (ensure-runtime-session)))
+  "Copies legacy global state into SESSION for backward-compatible call paths."
+  (setf (runtime-session-context session) (if (boundp '*context*) *context* nil)
+    (runtime-session-prior-context session) (if (boundp '*prior-context*) *prior-context* nil)
+    (runtime-session-model session) (if (boundp '*model*) *model* nil)
+    (runtime-session-prior-model session) (if (boundp '*prior-model*) *prior-model* nil)
+    (runtime-session-conversation-topic session)
+    (if (boundp '*conversation-topic*)
+    *conversation-topic*
+    "a general discussion about miscellaneous topics"))
+  session)
+
+(defun sync-globals-from-session (&optional (session (ensure-runtime-session)))
+  "Copies SESSION state back into legacy globals for existing code paths."
+  (setf *context* (runtime-session-context session)
+        *prior-context* (runtime-session-prior-context session)
+        *model* (runtime-session-model session)
+        *prior-model* (runtime-session-prior-model session)
+        *conversation-topic* (runtime-session-conversation-topic session))
+  session)
+
+(defmacro with-runtime-session ((session) &body body)
+  "Executes BODY with SESSION installed as *CURRENT-SESSION* and globals synchronized."
+  `(let ((*current-session* (ensure-runtime-session ,session)))
+     (sync-globals-from-session *current-session*)
+     (unwind-protect
+          (progn ,@body)
+     (sync-session-from-globals *current-session*))))
 
 (defparameter *return-text-string* t
   "If non-NIL, return the text string of the candidate instead of the candidate object.")

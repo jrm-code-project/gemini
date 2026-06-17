@@ -201,32 +201,120 @@
 (defparameter *chat-persona* nil
   "The current chat persona function.")
 
+(defun new-chat-with-session (session persona-name prompt)
+  "Initializes a new chat session in SESSION for PERSONA-NAME and PROMPT."
+  (let* ((session* (ensure-runtime-session session))
+         (persona (reload-persona persona-name prompt)))
+    (setf (runtime-session-context session*) nil
+          (runtime-session-prior-context session*) nil
+      (runtime-session-chat-persona session*) persona
+          *chat-persona* persona)
+    (sync-globals-from-session session*)
+    persona))
+
+(defun chat-with-session (session prompt &key files parts)
+  "Sends PROMPT through SESSION's active persona and updates session context."
+  (let ((session* (ensure-runtime-session session)))
+    (let ((persona (or (runtime-session-chat-persona session*)
+                       (runtime-session-default-persona-chatbot session*)
+                       (setf (runtime-session-default-persona-chatbot session*)
+                             (chatbot *default-content-generator*))
+                       (and (boundp '*chat-persona*) *chat-persona*)
+                       *default-persona-chatbot*)))
+      (when persona
+        (setf (runtime-session-chat-persona session*) persona)
+        (setf *chat-persona* persona)
+        (let ((result (if parts
+                          (if files
+                              (funcall persona prompt :parts parts :files files)
+                              (funcall persona prompt :parts parts))
+                          (if files
+                              (funcall persona prompt :files files)
+                              (funcall persona prompt)))))
+          (let ((agent (funcall persona :agent!)))
+            (when (typep agent 'conversational-agent)
+              (setf (runtime-session-prior-context session*)
+                    (runtime-session-context session*)
+                    (runtime-session-context session*)
+                    (conversational-agent-conversation agent))))
+          (sync-globals-from-session session*)
+          result)))))
+
+(defun continue-gemini-with-session (session prompt)
+  "Sends PROMPT to the default persona chatbot using explicit SESSION state."
+  (let* ((session* (ensure-runtime-session session))
+         (persona (or (runtime-session-default-persona-chatbot session*)
+                      (setf (runtime-session-default-persona-chatbot session*)
+                            (chatbot *default-content-generator*))))
+         (result (with-runtime-session (session*)
+                   (funcall persona prompt))))
+    (let ((agent (funcall persona :agent!)))
+      (when (typep agent 'conversational-agent)
+        (setf (runtime-session-prior-context session*)
+              (runtime-session-context session*)
+              (runtime-session-context session*)
+              (conversational-agent-conversation agent))
+        (sync-globals-from-session session*)))
+    result))
+
 (defun new-chat (persona-name prompt)
   "Initializes a new chat session with the specified PERSONA-NAME and PROMPT.
    Sets the global *chat-persona* variable to a chatbot function configured for the persona."
-  (setq *chat-persona* (reload-persona persona-name prompt)))
+  (new-chat-with-session (ensure-runtime-session) persona-name prompt)
+  nil)
 
 (defun chat (prompt &key files parts)
   "Sends a PROMPT to the current chat persona and prints the response."
-  (when (and (boundp '*chat-persona*)
-             *chat-persona*)
-    (if parts
-        (if files
-            (funcall *chat-persona* prompt :parts parts :files files)
-            (funcall *chat-persona* prompt :parts parts))
-        (if files
-            (funcall *chat-persona* prompt :files files)
-            (funcall *chat-persona* prompt))))
+  (chat-with-session (ensure-runtime-session) prompt :files files :parts parts)
   nil)
 
-(defparameter *heartbeat-thread*
-  (sb-thread:make-thread
-   (lambda ()
-     (loop (sb-ext::sleep 600)))))
+(defparameter *heartbeat-interval-seconds* 600
+  "Polling interval for the heartbeat maintenance thread.")
+
+(defvar *heartbeat-thread* nil
+  "Background heartbeat thread handle.")
+
+(defvar *heartbeat-thread-running* nil
+  "When non-NIL, the heartbeat thread main loop continues running.")
+
+(defun heartbeat-thread-alive-p ()
+  "Returns true when the heartbeat thread exists and is alive."
+  (and *heartbeat-thread*
+       (sb-thread:thread-alive-p *heartbeat-thread*)))
+
+(defun start-heartbeat-thread (&key (interval-seconds *heartbeat-interval-seconds*))
+  "Starts the heartbeat background thread if it is not already running.
+Returns the running thread object."
+  (setf *heartbeat-interval-seconds* interval-seconds)
+  (if (heartbeat-thread-alive-p)
+      *heartbeat-thread*
+      (progn
+        (setf *heartbeat-thread-running* t)
+        (setf *heartbeat-thread*
+              (sb-thread:make-thread
+               (lambda ()
+                 (loop while *heartbeat-thread-running*
+                       do (sb-ext::sleep *heartbeat-interval-seconds*)))
+               :name "Gemini Heartbeat"))
+        *heartbeat-thread*)))
+
+(defun stop-heartbeat-thread ()
+  "Stops the heartbeat background thread if it is running. Safe to call repeatedly."
+  (setf *heartbeat-thread-running* nil)
+  (when (heartbeat-thread-alive-p)
+    (handler-case
+        (sb-thread:terminate-thread *heartbeat-thread*)
+      (error (e)
+        (format *trace-output* "~&;; WARNING: Failed to terminate heartbeat thread: ~a~%" e))))
+  (setf *heartbeat-thread* nil)
+  nil)
+
+(eval-when (:load-toplevel :execute)
+  (start-heartbeat-thread))
 
 (defun continue-gemini (prompt)
   "Sends a PROMPT to the default Gemini persona chatbot and prints the response."
-  (funcall *default-persona-chatbot* prompt)
+  (continue-gemini-with-session (ensure-runtime-session) prompt)
   nil)
 
 (defun gemini-flash-lite-chat (prompt)
