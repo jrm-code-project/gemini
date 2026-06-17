@@ -24,77 +24,90 @@
                "trivial-backtrace"
                "trivial-timeout"
                "uiop")
-  :components ((:file "adapter"   :depends-on ("misc" "object" "package" "vars"))
-               (:file "analyze"   :depends-on ("gemini" "object" "package" "vars"))
-               (:file "asdfx"     :depends-on ("package"))
-               (:file "blogger"   :depends-on ("gemini" "object" "package" "vars"))
-               ;; loads last
-               (:file "config"    :depends-on ("analyze"
-                                               "asdfx"
-                                               "blogger"
-                                               "debug"
-                                               "evolution-tools"
-                                               "filesystem-tools"
-                                               "functions"
-                                               "gemini"
-                                               "git-tools"
-                                               "interaction-tools"
-                                               "lisp-introspection-tools"
-                                               "misc-tools"
-                                               "shell-tools"
-                                               "web-tools"
-                                               "improve"
-                                               "jsonrpc"
-                                               "llm-repl"
-                                               "mcp"
-                                               "misc"
-                                               "object"
-                                               "package"
-                                               "system"
-                                               "vars"))
-               (:file "debug"     :depends-on ("gemini" "misc" "object" "package" "vars"))
-               (:file "echo"      :depends-on ("gemini" "object" "package" "vars"))
-               (:file "evolution-tools" :depends-on ("package" "vars"))
-               (:file "filesystem-tools" :depends-on ("package" "vars"))
-               (:file "functions" :depends-on ("asdfx"
-                                               "evolution-tools"
-                                               "filesystem-tools"
-                                               "git-tools"
-                                               "interaction-tools"
-                                               "lisp-introspection-tools"
-                                               "mcp"
-                                               "misc"
-                                               "misc-tools"
-                                               "object"
-                                               "package"
-                                               "shell-tools"
-                                               "vars"
-                                               "web-tools"))
-               (:file "gemini-print" :depends-on ("misc" "object" "package" "vars"))
-               (:file "gemini-openai" :depends-on ("adapter" "macros" "misc" "object" "package" "vars"))
-               (:file "gemini-core"   :depends-on ("adapter" "gemini-print" "gemini-openai" "misc" "macros" "object" "package" "vars"))
-               (:file "gemini-personas" :depends-on ("functions" "misc"  "mcp" "object" "package" "vars"))
-               (:file "gemini-chatbot" :depends-on ("gemini-personas" "misc" "object" "package" "vars"))
-               (:file "gemini-iridium" :depends-on ("macros" "misc" "object" "package" "vars"))
-               (:file "uroboros" :depends-on ("gemini-core" "misc" "object" "package" "vars"))
-               (:file "gemini"    :depends-on ("functions" "gemini-core" "gemini-print" "gemini-openai" "gemini-personas" "gemini-chatbot" "gemini-iridium" "uroboros" "macros" "mcp" "misc" "object" "package" "vars"))
-               (:file "git-tools" :depends-on ("package" "vars"))
-               (:file "improve"   :depends-on ("gemini" "misc" "object" "package" "vars"))
-               (:file "interaction-tools" :depends-on ("package" "vars"))
-               (:file "jsonrpc"   :depends-on ("misc" "object" "package"))
-               (:file "lisp-introspection-tools" :depends-on ("package" "vars"))
-               (:file "llm-repl"  :depends-on ("functions" "gemini" "object" "package" "vars"))
-               (:file "macros"    :depends-on ("package"))
-               (:file "mcp"       :depends-on ("jsonrpc" "misc" "object" "package" "vars"))
-               (:file "meta"      :depends-on ("gemini" "misc" "object" "package" "vars"))
-               (:file "misc"      :depends-on ("package"))
-               (:file "misc-tools" :depends-on ("package" "vars"))
-               (:file "object"    :depends-on ("misc" "package" "vars"))
-               (:file "package")
-               (:file "parse"     :depends-on ("gemini" "misc" "object" "package" "vars"))
-               (:file "predator"  :depends-on ("package"))
-               (:file "shell-tools" :depends-on ("package" "vars"))
-               (:file "specimen"  :depends-on ("gemini" "misc" "object" "package" "vars"))
-               (:file "system"    :depends-on ("gemini" "misc" "object" "package" "vars"))
-               (:file "vars"      :depends-on ("package"))
-               (:file "web-tools" :depends-on ("package" "vars"))))
+  :components
+  ((:module "infrastructure"
+    :pathname ""
+    :components
+    ((:file "package")
+     (:file "vars"      :depends-on ("package"))
+     (:file "misc"      :depends-on ("package"))
+     (:file "macros"    :depends-on ("package"))
+     (:file "predator"  :depends-on ("package"))
+     (:file "object"    :depends-on ("misc" "package" "vars"))))
+
+   (:module "transport"
+    :pathname ""
+    :depends-on ("infrastructure")
+    :components
+    ((:file "asdfx")
+     (:file "jsonrpc")
+     (:file "mcp"       :depends-on ("jsonrpc"))))
+
+   (:module "adapters"
+    :pathname ""
+    :depends-on ("infrastructure")
+    :components
+    ((:file "adapter")
+     (:file "gemini-print")
+     (:file "gemini-openai" :depends-on ("adapter"))))
+
+   (:module "tools"
+    :pathname ""
+    :depends-on ("infrastructure" "transport")
+    :components
+    ((:file "git-tools")
+     (:file "shell-tools")
+     (:file "web-tools")
+     (:file "filesystem-tools")
+     (:file "interaction-tools")
+     (:file "lisp-introspection-tools")
+     (:file "evolution-tools")
+     (:file "misc-tools")
+     (:file "functions" :depends-on ("git-tools"
+                                     "shell-tools"
+                                     "web-tools"
+                                     "filesystem-tools"
+                                     "interaction-tools"
+                                     "lisp-introspection-tools"
+                                     "evolution-tools"
+                                     "misc-tools"))))
+
+   (:module "orchestration"
+    :pathname ""
+    :depends-on ("infrastructure" "transport" "adapters" "tools")
+    :components
+    ((:file "gemini-core")
+     (:file "gemini-personas")
+     (:file "gemini-chatbot" :depends-on ("gemini-personas"))
+     (:file "gemini-iridium")
+     (:file "uroboros"       :depends-on ("gemini-core"))
+     (:file "gemini"        :depends-on ("gemini-core"
+                                         "gemini-personas"
+                                         "gemini-chatbot"
+                                         "gemini-iridium"
+                                         "uroboros"))))
+
+   (:module "apps"
+    :pathname ""
+    :depends-on ("orchestration" "tools")
+    :components
+    ((:file "analyze")
+     (:file "blogger")
+     (:file "debug")
+     (:file "echo")
+     (:file "improve")
+     (:file "llm-repl")
+     (:file "meta")
+     (:file "parse")
+     (:file "specimen")
+     (:file "system")
+     (:file "config"    :depends-on ("analyze"
+                                     "blogger"
+                                     "debug"
+                                     "echo"
+                                     "improve"
+                                     "llm-repl"
+                                     "meta"
+                                     "parse"
+                                     "specimen"
+                                     "system"))))))
