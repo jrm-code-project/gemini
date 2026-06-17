@@ -154,6 +154,17 @@ to abandon the task and return immediately to the REPL, leaving the task running
   (loop for sub on list by (lambda (l) (nthcdr n l))
         collect (ldiff sub (nthcdr n sub))))
 
+(defun terminate-thread-safely (thread &key (label "worker thread"))
+  "Terminates THREAD when alive. Safe to call repeatedly."
+  (when (and thread (sb-thread:thread-alive-p thread))
+    (handler-case
+        (sb-thread:terminate-thread thread)
+      (error (e)
+        (log-warn "Failed to terminate ~a ~a: ~a"
+                  label
+                  (or (sb-thread:thread-name thread) "<unnamed>")
+                  e)))))
+
 (defun map-parallel (function list &key timeout-ms (batch-size 4))
   "Parallel map using futures enqueued and executed in sequential batches of BATCH-SIZE."
   (let* ((captured-io (list *standard-input* *standard-output* *error-output*
@@ -205,7 +216,11 @@ to abandon the task and return immediately to the REPL, leaving the task running
                              (loop for fut in current-futures
                                    collect (if (sb-thread:thread-alive-p (future-thread fut))
                                                "[TIMEOUT]"
-                                               (ignore-errors (await fut))))))
+                                               (handler-case
+                                                   (await fut)
+                                                 (error (e)
+                                                   (log-warn "Failed to harvest timed-out future result: ~a" e)
+                                                   (format nil "[ERROR: ~A]" e)))))))
                        (setf results (append results harvested-results))
                        ;; Mark rest of list as "[TIMEOUT]"
                        (let ((unstarted-count (loop for b in (member batch batches) sum (length b))))
@@ -216,8 +231,7 @@ to abandon the task and return immediately to the REPL, leaving the task running
       ;; Clean up any remaining threads in the current active batch if we exit map-parallel prematurely
       (dolist (fut current-futures)
         (let ((thread (and fut (future-thread fut))))
-          (when (and thread (sb-thread:thread-alive-p thread))
-            (ignore-errors (sb-thread:terminate-thread thread))))))))
+          (terminate-thread-safely thread :label "worker thread"))))))
 
 
 ;;; ---------------------------------------------------------------------------

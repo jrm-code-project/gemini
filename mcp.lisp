@@ -369,30 +369,31 @@
          (system-prompt (get-system-prompt params))
          (temperature (and (stringp (get-temperature params))
                            (parse-float-safely (get-temperature params))))
-         (sample (let ((*system-instruction*
-                         (content
-                          :parts (list (part system-prompt))))
-                       (*max-output-tokens* max-tokens)
-                       (*return-text-string* nil)
-                       (*context* (context server))
-                       (*temperature* temperature)
-                       (prompt (remove nil (map 'list (lambda (message)
-                                                        (let* ((role (get-role message))
-                                                               (content (get-content message))
-                                                               (type (get-type content)))
-                                                          (if (equal type "text")
-                                                              (content
-                                                               :role role
-                                                               :parts (list (part (get-text content)))))))
-                                                messages))))
-                   (if include-context
-                       (setf *prior-context* (context server))
-                       (setf *prior-context* nil))
-                   (let ((result (continue-gemini prompt)))
-                     (if include-context
-                         (setf (context server) (append result *prior-context*))
-                         (setf (context server) result))
-                     result))))
+         (sample (let* ((session (make-runtime-session
+                      :context (context server)
+                      :prior-context (if include-context (context server) nil)
+                      :conversation-topic (current-topic)))
+                (*system-instruction*
+                  (content
+                   :parts (list (part system-prompt))))
+                (*max-output-tokens* max-tokens)
+                (*return-text-string* nil)
+                (*temperature* temperature)
+                (prompt (remove nil (map 'list (lambda (message)
+                                 (let* ((role (get-role message))
+                                    (content (get-content message))
+                                    (type (get-type content)))
+                                   (if (equal type "text")
+                                     (content
+                                    :role role
+                                    :parts (list (part (get-text content)))))))
+                             messages))))
+               (let ((result (continue-gemini-with-session session prompt)))
+               (if include-context
+                 (setf (context server)
+                     (append result (runtime-session-prior-context session)))
+                 (setf (context server) result))
+               result))))
     (format t "~&sample: ~s~%" (dehashify sample))
     (chanl:send (outgoing-channel (jsonrpc-client server))
                 (object :jsonrpc "2.0"
@@ -415,11 +416,39 @@
           (let ((name (car server-config)))
             (push (create-mcp-server name (cdr server-config)) *mcp-servers*)))))))
 
+(defun stop-mcp-server (mcp-server)
+  "Stops one MCP server process and associated JSONRPC transport.
+Safe to call repeatedly."
+  (when (and mcp-server (slot-boundp mcp-server 'jsonrpc-client))
+    (let* ((client (jsonrpc-client mcp-server))
+           (proc (and client (process-info client))))
+      (when proc
+        (handler-case
+            (progn
+              (when (uiop:process-alive-p proc)
+                (uiop:terminate-process proc :urgent t)
+                (uiop:wait-process proc))
+              (uiop:close-streams proc))
+          (error (e)
+            (format *trace-output* "~&Warning: Failed to stop MCP server ~a: ~a~%"
+                    (get-name mcp-server)
+                    e)
+            (finish-output *trace-output*))))))
+  nil)
+
+(defun stop-mcp-servers ()
+  "Stops all MCP servers and clears the global registry. Safe to call repeatedly."
+  (when *mcp-servers*
+    (dolist (server *mcp-servers*)
+      (stop-mcp-server server))
+    (setf *mcp-servers* nil))
+  nil)
+
 (eval-when (:load-toplevel :execute)
   (start-mcp-servers))
 
 (defun restart-mcp-servers ()
-  (setq *mcp-servers* nil)
+  (stop-mcp-servers)
   (start-mcp-servers))
 
 (defun memory-config (memory-file)

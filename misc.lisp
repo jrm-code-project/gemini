@@ -2,6 +2,56 @@
 
 (in-package "GEMINI")
 
+(defparameter *log-level* :info
+  "Minimum log level emitted by log-message.
+Valid levels are :debug, :info, :warn, and :error.")
+
+(defparameter +log-level-order+
+  '(:debug :info :warn :error)
+  "Log levels ordered from least to most severe.")
+
+(defun normalize-log-level (level)
+  "Normalizes LEVEL to one of the supported keyword levels."
+  (let ((normalized (if (keywordp level)
+                        level
+                        (->keyword level))))
+    (if (member normalized +log-level-order+)
+        normalized
+        :info)))
+
+(defun log-level-enabled-p (level)
+  "Returns T when LEVEL should be emitted at current *log-level*."
+  (let ((level-pos (position (normalize-log-level level) +log-level-order+))
+        (threshold-pos (position (normalize-log-level *log-level*) +log-level-order+)))
+    (and level-pos threshold-pos
+         (>= level-pos threshold-pos))))
+
+(defun log-message (level format-string &rest args)
+  "Writes a formatted log line to *trace-output* when LEVEL is enabled."
+  (let ((level* (normalize-log-level level)))
+    (when (log-level-enabled-p level*)
+      (apply #'format *trace-output*
+             (concatenate 'string "~&[" (string-upcase (symbol-name level*)) "] " format-string)
+             args)
+      (finish-output *trace-output*))
+    nil))
+
+(defun log-debug (format-string &rest args)
+  "Logs a debug-level message."
+  (apply #'log-message :debug format-string args))
+
+(defun log-info (format-string &rest args)
+  "Logs an info-level message."
+  (apply #'log-message :info format-string args))
+
+(defun log-warn (format-string &rest args)
+  "Logs a warning-level message."
+  (apply #'log-message :warn format-string args))
+
+(defun log-error (format-string &rest args)
+  "Logs an error-level message."
+  (apply #'log-message :error format-string args))
+
 (defun seconds-per-minute ()
   "Returns the number of seconds in a minute."
   (declare (inline seconds-per-minute))

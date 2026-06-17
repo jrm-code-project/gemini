@@ -70,8 +70,7 @@
                                               (setf (gethash id (request-threads jsonrpc-client)) new-thread))
                                             (funcall thunk))
                                    (abort ()
-                                     (format *trace-output* "~&Aborting request thread for ID ~a~%" id)
-                                     (finish-output *trace-output*)
+                                     (log-info "Aborting request thread for ID ~a" id)
                                      (return nil)))
                               (with-jsonrpc-client-lock (jsonrpc-client)
                                 (remhash id (request-threads jsonrpc-client))))))
@@ -144,8 +143,7 @@
                         (funcall receiver line))
                       (unless (eq line eof-value)
                         (iter (read-line stream nil eof-value))))
-                 (format *trace-output* "~&Line receiver for ~a ~a exiting...~%" stream-name name)
-                 (finish-output *trace-output*)))))
+                 (log-info "Line receiver for ~a ~a exiting..." stream-name name)))))
 
       (flet ((error-receiver (receiver)
                (line-receiver 'error (uiop:process-info-error-output process-info) receiver))
@@ -161,8 +159,7 @@
                           (let ((message (jsonx:with-decoder-jrm-semantics (cl-json:decode-json-from-string line))))
                             (setf (latest-server-output client) (get-universal-time))
                             (cond ((not (equal (get-jsonrpc message) "2.0"))
-                                   (format *trace-output* "~&Unexpected jsonrpc version: ~s~%" message)
-                                   (finish-output *trace-output*)
+                              (log-warn "Unexpected jsonrpc version: ~s" message)
                                    ;; discard messages with wrong jsonrpc version
                                    nil)
 
@@ -181,8 +178,7 @@
                                   (t (funcall receiver message)))))
                     ;; Handle JSON parse errors by turning them into notifications.
                     (json:json-syntax-error (e)
-                      (format *trace-output* "~&JSON Parse Error: ~a~%" e)
-                      (finish-output *trace-output*)
+                      (log-warn "JSON parse error: ~a" e)
                       (funcall receiver
                                (object :jsonrpc "2.0"
                                        :method "notification/message"
@@ -197,8 +193,7 @@
                           (unless (eq json eof-value)
                             (when json (json-send json))
                             (iter (chanl:recv (outgoing-channel client)))))
-                     (format *trace-output* "~&Exiting JSONRPC send thread for ~a...~%" name)
-                     (finish-output *trace-output*)))
+                     (log-info "Exiting JSONRPC send thread for ~a..." name)))
                  :name (format nil "~a JSONRPC Output" name)))
 
               (output-thread
@@ -252,8 +247,7 @@
                                  (chanl:send (first incoming-channel) message)
                                  ;; If incoming channel is missing, log message and discard it.
                                  (progn
-                                   (format *trace-output* "~&No incoming channel for message: ~s~%" message)
-                                   (finish-output *trace-output*)))))
+                                   (log-warn "No incoming channel for message: ~s" message)))))
 
                           (t (start-request-thread client (get-id message)
                                                    (lambda ()
@@ -266,8 +260,7 @@
                  (error-receiver
                   (lambda (line)
                     (unless (eql line eof-value)
-                      (format *trace-output* "~&[~a] ~a~%" name line)
-                      (finish-output *trace-output*))))
+                      (log-warn "[~a] ~a" name line))))
                  :name (format nil "~a JSONRPC Error Output" name))))
 
           (sb-thread:make-thread
@@ -277,8 +270,7 @@
                ;; (format *trace-output* "~&JSONRPC Bookkeeper running for ~a...~%" name)
                ;; (finish-output *trace-output*)
                (cond ((not (uiop:process-alive-p (process-info client)))
-                      (format *trace-output* "~&Process for ~a has exited.~%" name)
-                      (finish-output *trace-output*)
+                 (log-warn "Process for ~a has exited." name)
                       (chanl:send (outgoing-channel client) eof-value)
 
                       ;; Simply exit the bookkeeper thread.
@@ -289,10 +281,9 @@
                      ((> (- (get-universal-time) (latest-server-output client))
                          +jsonrpc-nonresponse-timeout+)
                       ;; Assume the server is dead.
-                      (format *trace-output* "~&No response from ~a for ~a seconds, assuming it hanged.~%"
-                              name
-                              +jsonrpc-nonresponse-timeout+)
-                      (finish-output *trace-output*)
+                            (log-error "No response from ~a for ~a seconds, assuming it hanged."
+                           name
+                           +jsonrpc-nonresponse-timeout+)
                       ;; Terminate the process and all associated threads.
                       (chanl:send (outgoing-channel client) eof-value)
                       (sb-thread:join-thread input-thread)
@@ -301,8 +292,7 @@
                       (sb-thread:interrupt-thread output-thread #'abort)
                       (uiop:terminate-process (process-info client) :urgent t)
                       (uiop:wait-process (process-info client))
-                      (format *trace-output* "~&Process for ~a has been terminated.~%" name)
-                      (finish-output *trace-output*)
+                      (log-warn "Process for ~a has been terminated." name)
                       (map nil (lambda (entry)
                                  (let* ((id (car entry))
                                         (channel-info (cdr entry))
@@ -329,9 +319,8 @@
                                           (start-time (third channel-info)))
                                      (when (> (- (get-universal-time) start-time)
                                               +jsonrpc-request-timeout+)
-                                       (format *trace-output* "~&Request ~a to ~a has timed out, cancelling...~%"
-                                               id name)
-                                       (finish-output *trace-output*)
+                                           (log-warn "Request ~a to ~a has timed out, cancelling..."
+                                         id name)
                                        (chanl:send (outgoing-channel client)
                                                    (object :jsonrpc "2.0"
                                                            :method "notifications/cancelled"

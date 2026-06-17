@@ -66,7 +66,21 @@ Notes:
 - `:googleapi t` uses the existing Google Gemini API flow.
 - `:googleapi nil` routes requests through the OpenAI-compatible chat completions endpoint.
 - `:url` is optional. If omitted, the default is `http://localhost:1234/v1/chat/completions`.
-- OpenAI-compatible authorization currently uses the existing hardcoded header in the implementation (`Bearer lm-studio`) for local-compatible backends.
+- OpenAI-compatible authorization is now resolved in this order:
+    1. Runtime variable `gemini::*openai-authorization*` (full header value, e.g. `"Bearer <token>"`)
+    2. Environment variable `OPENAI_AUTHORIZATION` (full header value)
+    3. Environment variable `OPENAI_API_KEY` (wrapped as `Bearer <key>`)
+    4. Optional local fallback `Bearer lm-studio` when `gemini::*openai-use-lm-studio-default-authorization*` is set to non-NIL
+
+Examples:
+
+```common-lisp
+;; Use explicit runtime header
+(setf gemini::*openai-authorization* "Bearer your-token")
+
+;; Or enable explicit LM Studio fallback compatibility mode
+(setf gemini::*openai-use-lm-studio-default-authorization* t)
+```
 
 ## Dependencies
 

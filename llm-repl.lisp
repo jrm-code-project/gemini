@@ -20,7 +20,8 @@
 
 (defun repl-eval-print-form (form)
   "Evaluates a Lisp FORM and prints the result."
-  (let ((values (with-llm-debugger (multiple-value-list (eval form)))))
+  (let* ((session (ensure-runtime-session))
+         (values (with-llm-debugger (multiple-value-list (eval form)))))
     (setq *** **
           ** *
           * (if (null values) nil (car values))
@@ -39,7 +40,7 @@
                                (setf (gethash "text" text-part) (format nil "eval ~s" form))
                                text-part))
                      :role "user")
-            *context*)
+        (runtime-session-context session))
       (push (content :parts (list
                              (let ((call-part (make-hash-table :test 'equal)))
                                (setf (gethash "functionCall" call-part)
@@ -68,15 +69,16 @@
                                      })
                                response-part))
                      :role "function")
-            *context*)
+                            (runtime-session-context session))
       (push (content :parts
                      (list (let ((text-part (make-hash-table :test 'equal)))
                              (setf (gethash "text" text-part)
                                    (format nil "~A" printed-values))
                              text-part))
                      :role "model")
-            *context*)
-      (setq *prior-context* *context*))
+                            (runtime-session-context session))
+                          (setf (runtime-session-prior-context session) (runtime-session-context session))
+                          (sync-globals-from-session session))
     (apply #'values values)))
 
 (defparameter +general-repl-system-instruction+

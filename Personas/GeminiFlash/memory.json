@@ -1,0 +1,50 @@
+{"type":"entity","name":"Joshua Francis Higgins","entityType":"Person","observations":["was a mariner","BirthDate: 1854-09-23","DeathDate: 1912-06-29","IsDeceased: True"]}
+{"type":"entity","name":"Orien Higgins","entityType":"Person","observations":["BirthDate: Unknown","IsDeceased: True"]}
+{"type":"entity","name":"Albertina Chandler","entityType":"Person","observations":["BirthDate: 1865-02-22","IsDeceased: True"]}
+{"type":"entity","name":"James Chandler","entityType":"Person","observations":["BirthDate: Unknown","IsDeceased: True"]}
+{"type":"entity","name":"Amelia Talbot","entityType":"Person","observations":["BirthDate: Unknown","IsDeceased: True"]}
+{"type":"entity","name":"Ella Albertina Higgins","entityType":"Person","observations":["BirthDate: 1884-10-06","IsDeceased: True"]}
+{"type":"entity","name":"Willis Clark","entityType":"Person","observations":["BirthDate: Unknown","IsDeceased: True"]}
+{"type":"entity","name":"Herbert Edgar Higgins","entityType":"Person","observations":["BirthDate: 1886-02-18","IsDeceased: True"]}
+{"type":"entity","name":"Leon Chandler Higgins","entityType":"Person","observations":["BirthDate: 1887-06-25","DeathDate: 1908-11-23","IsDeceased: True"]}
+{"type":"entity","name":"Irving Augustus Higgins","entityType":"Person","observations":["BirthDate: 1889-12-06","IsDeceased: True"]}
+{"type":"entity","name":"Pearl Madison Higgins","entityType":"Person","observations":["BirthDate: 1891-05-19","IsDeceased: True"]}
+{"type":"entity","name":"Roy H. Crocker","entityType":"Person","observations":["BirthDate: Unknown","IsDeceased: True"]}
+{"type":"entity","name":"Eliza Jane Higgins","entityType":"Person","observations":["BirthDate: 1892-12-31","IsDeceased: True"]}
+{"type":"entity","name":"Lillian Estelle Higgins","entityType":"Person","observations":["BirthDate: 1895-12-20","IsDeceased: True"]}
+{"type":"entity","name":"Lloyd Francis Higgins","entityType":"Person","observations":["BirthDate: 1898-02-06","IsDeceased: True"]}
+{"type":"entity","name":"Maurice Westly Higgins","entityType":"Person","observations":["BirthDate: 1901-01-17","IsDeceased: True"]}
+{"type":"entity","name":"Louis Raymond Higgins","entityType":"Person","observations":["BirthDate: 1902-08-04","IsDeceased: True"]}
+{"type":"entity","name":"Chester Winfield Higgins","entityType":"Person","observations":["BirthDate: 1905-12-30","IsDeceased: True"]}
+{"type":"entity","name":"Azel Talbot Higgins","entityType":"Person","observations":["BirthDate: 1907-04-13","IsDeceased: True"]}
+{"type":"relation","from":"Joshua Francis Higgins","to":"Albertina Chandler","relationType":"married"}
+{"type":"relation","from":"James Chandler","to":"Amelia Talbot","relationType":"married"}
+{"type":"relation","from":"Ella Albertina Higgins","to":"Willis Clark","relationType":"married"}
+{"type":"relation","from":"Pearl Madison Higgins","to":"Roy H. Crocker","relationType":"married"}
+{"type":"relation","from":"James Chandler","to":"Albertina Chandler","relationType":"parent of"}
+{"type":"relation","from":"Orien Higgins","to":"Joshua Francis Higgins","relationType":"parent of"}
+{"type":"relation","from":"Joshua Francis Higgins","to":"Ella Albertina Higgins","relationType":"parent of"}
+{"type":"relation","from":"Joshua Francis Higgins","to":"Herbert Edgar Higgins","relationType":"parent of"}
+{"type":"relation","from":"Joshua Francis Higgins","to":"Leon Chandler Higgins","relationType":"parent of"}
+{"type":"relation","from":"Joshua Francis Higgins","to":"Irving Augustus Higgins","relationType":"parent of"}
+{"type":"relation","from":"Joshua Francis Higgins","to":"Pearl Madison Higgins","relationType":"parent of"}
+{"type":"relation","from":"Joshua Francis Higgins","to":"Eliza Jane Higgins","relationType":"parent of"}
+{"type":"relation","from":"Joshua Francis Higgins","to":"Lillian Estelle Higgins","relationType":"parent of"}
+{"type":"relation","from":"Joshua Francis Higgins","to":"Lloyd Francis Higgins","relationType":"parent of"}
+{"type":"relation","from":"Joshua Francis Higgins","to":"Maurice Westly Higgins","relationType":"parent of"}
+{"type":"relation","from":"Joshua Francis Higgins","to":"Louis Raymond Higgins","relationType":"parent of"}
+{"type":"relation","from":"Joshua Francis Higgins","to":"Chester Winfield Higgins","relationType":"parent of"}
+{"type":"relation","from":"Joshua Francis Higgins","to":"Azel Talbot Higgins","relationType":"parent of"}
+{"type":"relation","from":"Albertina Chandler","to":"Ella Albertina Higgins","relationType":"parent of"}
+{"type":"relation","from":"Albertina Chandler","to":"Herbert Edgar Higgins","relationType":"parent of"}
+{"type":"relation","from":"Albertina Chandler","to":"Leon Chandler Higgins","relationType":"parent of"}
+{"type":"relation","from":"Albertina Chandler","to":"Irving Augustus Higgins","relationType":"parent of"}
+{"type":"relation","from":"Albertina Chandler","to":"Pearl Madison Higgins","relationType":"parent of"}
+{"type":"relation","from":"Albertina Chandler","to":"Eliza Jane Higgins","relationType":"parent of"}
+{"type":"relation","from":"Albertina Chandler","to":"Lillian Estelle Higgins","relationType":"parent of"}
+{"type":"relation","from":"Albertina Chandler","to":"Lloyd Francis Higgins","relationType":"parent of"}
+{"type":"relation","from":"Albertina Chandler","to":"Maurice Westly Higgins","relationType":"parent of"}
+{"type":"relation","from":"Albertina Chandler","to":"Louis Raymond Higgins","relationType":"parent of"}
+{"type":"relation","from":"Albertina Chandler","to":"Chester Winfield Higgins","relationType":"parent of"}
+{"type":"relation","from":"Albertina Chandler","to":"Azel Talbot Higgins","relationType":"parent of"}
+{"type":"relation","from":"Amelia Talbot","to":"Albertina Chandler","relationType":"parent of"}
