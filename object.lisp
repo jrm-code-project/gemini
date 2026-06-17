@@ -450,6 +450,30 @@
   "Creates a thought part object containing the given TEXT."
   (part "" :thought text))
 
+(defun normalize-schema-required (required)
+  "Normalizes REQUIRED into a flat vector of lowercase strings."
+  (labels ((required-name (item)
+             (cond ((and (vectorp item)
+                         (= (length item) 1))
+                    (required-name (aref item 0)))
+                   ((and (consp item)
+                         (null (cdr item)))
+                    (required-name (car item)))
+                   ((or (keywordp item)
+                        (symbolp item)
+                        (stringp item))
+                    (string-downcase (string item)))
+                   (t
+                    (string-downcase (format nil "~a" item))))))
+    (cond ((null required)
+           #())
+          ((vectorp required)
+           (map 'vector #'required-name required))
+          ((listp required)
+           (map 'vector #'required-name required))
+          (t
+           (vector (required-name required))))))
+
 (defun schema (&key type format title description
                  (nullable nil nullable-supplied-p)
                  (enum nil enum-supplied-p)
@@ -501,7 +525,7 @@
     (when properties-supplied-p
       (setf (get-properties schema) properties))
     (when required-supplied-p
-      (setf (get-required schema) required))
+      (setf (get-required schema) (normalize-schema-required required)))
     schema))
 
 (defclass persona-config ()
