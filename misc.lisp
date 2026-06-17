@@ -31,8 +31,8 @@ Valid levels are :debug, :info, :warn, and :error.")
   (let ((level* (normalize-log-level level)))
     (when (log-level-enabled-p level*)
       (apply #'format *trace-output*
-             (concatenate 'string "~&[" (string-upcase (symbol-name level*)) "] " format-string)
-             args)
+             (concatenate 'string "~&;; ~a: " format-string)
+             level* args)
       (finish-output *trace-output*))
     nil))
 
@@ -56,22 +56,27 @@ Valid levels are :debug, :info, :warn, and :error.")
   "Returns the number of seconds in a minute."
   (declare (inline seconds-per-minute))
   60)
+
 (defun minutes-per-hour ()
   "Returns the number of minutes in an hour."
   (declare (inline minutes-per-hour))
  60)
+
 (defun hours-per-day ()
   "Returns the number of hours in a day."
   (declare (inline hours-per-day))
   24)
+
 (defun minutes-per-day ()
   "Returns the number of minutes in a day."
   (declare (inline minutes-per-day))
   (* (minutes-per-hour) (hours-per-day)))
+
 (defun seconds-per-day ()
   "Returns the number of seconds in a day."
   (declare (inline seconds-per-day))
   (* (seconds-per-minute) (minutes-per-day)))
+
 (defun absolute-day ()
   "Return the day since the start of the epoch (UTC)."
   (declare (inline absolute-day))
@@ -505,19 +510,19 @@ Does not add values to ALISTS."
               (car forms)
               (cons 'progn (reverse forms)))))))
 
-            (defun parse-float-safely (string)
-            "Parses a float from STRING safely without using the Lisp reader."
-            (let* ((trimmed (str:trim string))
-            (clean (cl-ppcre:regex-replace-all "[^0-9.]" trimmed "")))
-            (if (and (string/= clean "") (search "." clean))
-            (let* ((parts (str:split "." clean))
-            (integer (or (parse-integer (car parts) :junk-allowed t) 0))
-            (fraction-str (cadr parts))
-            (fraction (or (parse-integer fraction-str :junk-allowed t) 0))
-            (divisor (expt 10 (length fraction-str))))
-            (float (+ integer (/ fraction divisor))))
-            ;; Fallback to integer or nil
-            (float (or (parse-integer clean :junk-allowed t) 0.0)))))
+(defun parse-float-safely (string)
+  "Parses a float from STRING safely without using the Lisp reader."
+  (let* ((trimmed (str:trim string))
+         (clean (cl-ppcre:regex-replace-all "[^0-9.]" trimmed "")))
+    (if (and (string/= clean "") (search "." clean))
+        (let* ((parts (str:split "." clean))
+               (integer (or (parse-integer (car parts) :junk-allowed t) 0))
+               (fraction-str (cadr parts))
+               (fraction (or (parse-integer fraction-str :junk-allowed t) 0))
+               (divisor (expt 10 (length fraction-str))))
+          (float (+ integer (/ fraction divisor))))
+        ;; Fallback to integer or nil
+        (float (or (parse-integer clean :junk-allowed t) 0.0)))))
 
 (defun handle-tilde (namestring)
   "Handles tilde (~) in NAMESRING, expanding it to the user's home directory."

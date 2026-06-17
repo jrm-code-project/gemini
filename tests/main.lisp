@@ -1644,3 +1644,576 @@
   (let ((results (gemini:deploy-uroboros "Write a single sentence about Lisp" :max-iterations 1)))
     (is (= 1 (length results)))
     (is (stringp (car results)))))
+
+(test test-interaction-step-parsing
+  "Test parsing of timeline-oriented steps from the Interactions API responses."
+  (let* ((model-output-json (gemini::object
+                             :type "model_output"
+                             :index 1
+                             :content (gemini::object
+                                       :parts (vector (gemini::object :text "Hello world")))))
+         (thought-json (gemini::object
+                        :type "thought"
+                        :index 0
+                        :signature "opaque_thought_sig"
+                        :summary "Thinking about the meaning of life"))
+         (func-call-json (gemini::object
+                          :type "function_call"
+                          :index 2
+                          :id "call_123"
+                          :function-call (gemini::object
+                                          :name "get_weather"
+                                          :arguments (gemini::object :location "Boston"))))
+         (step-mo (gemini:parse-interaction-step model-output-json))
+         (step-th (gemini:parse-interaction-step thought-json))
+         (step-fc (gemini:parse-interaction-step func-call-json)))
+    
+    (is (typep step-mo 'gemini:model-output-step))
+    (is (= 1 (gemini:get-step-index step-mo)))
+    (is (equal '("Hello world") (gemini:get-content step-mo)))
+    
+    (is (typep step-th 'gemini:thought-step))
+    (is (= 0 (gemini:get-step-index step-th)))
+    (is (equal "opaque_thought_sig" (gemini:get-signature step-th)))
+    (is (equal "Thinking about the meaning of life" (gemini:get-summary step-th)))
+    
+    (is (typep step-fc 'gemini:function-call-step))
+    (is (= 2 (gemini:get-step-index step-fc)))
+    (is (equal "call_123" (gemini:get-call-id step-fc)))
+    (is (equal "get_weather" (gemini:get-function-name step-fc)))
+    (is (equal "Boston" (gethash :location (gemini:get-arguments step-fc))))))
+
+(test test-interactions-backend-statefulness
+  "Verify that interactions-backend injects previous_interaction_id, and captures the new interaction and environment IDs."
+  (let ((session (gemini:make-runtime-session))
+        (orig-google-post #'google:google-post))
+    (gemini:with-runtime-session (session)
+      ;; Set initial interaction ID
+      (setf (gemini:runtime-session-interaction-id session) "initial_id")
+      
+      ;; Bind a mock post function that intercepts payload and asserts it has previous_interaction_id
+      (unwind-protect
+           (progn
+             (setf (fdefinition 'google:google-post)
+                   (lambda (url key payload &key api-revision read-timeout connect-timeout)
+                     (declare (ignore url key api-revision read-timeout connect-timeout))
+                     (is (equal "initial_id" (gethash "previous_interaction_id" payload)))
+                     ;; Return mock response with new ID and environment ID
+                     (let ((resp (gemini::object
+                                  :id "new_interaction_id"
+                                  :environment-id "env_abc_123"
+                                  :environmentId "env_abc_123"
+                                  :steps #())))
+                       resp)))
+             
+             ;; Invoke backend
+             (let ((backend (make-instance 'gemini:interactions-backend))
+                   (dummy-payload (make-hash-table :test 'equal)))
+               (setf (gethash "model" dummy-payload) "gemini-3.5-flash")
+               (multiple-value-bind (steps resp)
+                   (gemini:invoke-backend backend "gemini-3.5-flash" dummy-payload)
+                 (declare (ignore steps resp))
+                 ;; Assert that session was updated
+                 (is (equal "new_interaction_id" (gemini:runtime-session-interaction-id session)))
+                 (is (equal "env_abc_123" (gemini:runtime-session-environment-id session))))))
+        ;; Restore orig post
+        (setf (fdefinition 'google:google-post) orig-google-post)))))
+
+(test test-interactions-backend-normalizes-steps-to-candidates
+  "Verify that interactions-backend returns Gemini-style candidates and usage metadata from Interactions steps."
+  (let ((session (gemini:make-runtime-session))
+        (orig-google-post #'google:google-post))
+    (gemini:with-runtime-session (session)
+      (unwind-protect
+           (progn
+             (setf (fdefinition 'google:google-post)
+                   (lambda (url key payload &key api-revision read-timeout connect-timeout)
+                     (declare (ignore url key payload api-revision read-timeout connect-timeout))
+                     (gemini::object
+                      :id "new_interaction_id"
+                      :steps (vector
+                              (gemini::object
+                               :type "thought"
+                               :index 0
+                               :signature "sig_1"
+                               :summary "Thinking")
+                              (gemini::object
+                               :type "function_call"
+                               :index 1
+                               :id "call_123"
+                               :function-call (gemini::object
+                                               :name "get_weather"
+                                               :arguments (gemini::object :location "Boston")))
+                              (gemini::object
+                               :type "model_output"
+                               :index 2
+                               :content (gemini::object
+                                         :parts (vector (gemini::object :text "Hello world")))))
+                      :usage-metadata (gemini::object
+                                       :prompt-token-count 11
+                                       :thoughts-token-count 7
+                                       :candidates-token-count 3))))
+
+             (let ((backend (make-instance 'gemini:interactions-backend))
+                   (dummy-payload (make-hash-table :test 'equal)))
+               (setf (gethash "model" dummy-payload) "gemini-3.5-flash")
+               (multiple-value-bind (response usage)
+                   (gemini:invoke-backend backend "gemini-3.5-flash" dummy-payload)
+                 (let* ((candidates (gemini:get-candidates response))
+                        (candidate (car candidates))
+                        (content (gemini:get-content candidate))
+                        (parts (gemini:get-parts content))
+                        (function-calls (gemini::extract-function-calls-from-results response)))
+                   (is (= 1 (length candidates)))
+                   (is (equal 11 (gemini:get-prompt-token-count usage)))
+                   (is (equal 7 (gemini:get-thoughts-token-count usage)))
+                   (is (equal 3 (gemini:get-candidates-token-count usage)))
+                   (is (= 3 (length parts)))
+                   (is (gemini:thought-part? (first parts)))
+                   (is (gemini::function-call-part? (second parts)))
+                   (is (gemini:text-part? (third parts)))
+                   (is (equal "Hello world" (gemini:get-text (third parts))))
+                   (is (= 1 (length function-calls)))
+                   (is (equal "get_weather"
+                     (gemini:get-name (gemini:get-function-call (first function-calls)))))))))
+        ;; Restore orig post
+        (setf (fdefinition 'google:google-post) orig-google-post)))))
+
+(test test-interactions-backend-streaming
+  "Verify that interactions-backend streaming handles SSE events, updates session IDs, and invokes the receiver."
+  (let ((session (gemini:make-runtime-session))
+        (orig-post-stream #'gemini::google-interactions-post-streaming))
+    (gemini:with-runtime-session (session)
+      (unwind-protect
+           (progn
+             ;; Override the streaming poster to simulate SSE chunks
+             (setf (fdefinition 'gemini::google-interactions-post-streaming)
+                   (lambda (uri api-key payload receiver &key verbose read-timeout connect-timeout)
+                     (declare (ignore uri api-key verbose read-timeout connect-timeout))
+                     (is (gethash "stream" payload))
+                     
+                     ;; 1. Simulate receiving interaction.created
+                     (funcall receiver (gemini::object :event-type "interaction.created" :interaction-id "id_streaming_123"))
+                     
+                     ;; 2. Simulate receiving step.start
+                     (funcall receiver (gemini::object :event-type "step.start"
+                                                       :step (gemini::object :type "thought" :index 0 :signature "sig" :summary "Starting thoughts")))
+                     
+                     ;; 3. Simulate receiving step.delta (incremental chunk)
+                     (funcall receiver (gemini::object :event-type "step.delta"
+                                                       :delta (gemini::object :text "Hello ")))
+                     (funcall receiver (gemini::object :event-type "step.delta"
+                                                       :delta (gemini::object :text "world")))
+                     
+                     ;; 4. Simulate receiving step.stop
+                     (funcall receiver (gemini::object :event-type "step.stop"
+                                                       :step (gemini::object :type "thought" :index 0 :signature "sig" :summary "Thoughts complete")))
+                     
+                     ;; 5. Simulate receiving interaction.completed (final payload)
+                     (funcall receiver (gemini::object :event-type "interaction.completed"
+                                                       :interaction (gemini::object :id "id_streaming_123" :environment-id "env_streaming_xyz" :steps #())))
+                     nil))
+             
+             ;; Collect and verify the parsed events passed to the receiver
+             (let ((events '())
+                   (backend (make-instance 'gemini:interactions-backend))
+                   (dummy-payload (make-hash-table :test 'equal)))
+               (gemini:invoke-backend backend "gemini-3.5-flash" dummy-payload
+                                      :receiver (lambda (event-type parsed-data raw)
+                                                  (declare (ignore raw))
+                                                  (push (list event-type parsed-data) events)))
+               
+               ;; Validate chronological structure of callbacks
+               (let ((rev-events (nreverse events)))
+                 (is (= 6 (length rev-events)))
+                 (is (eq :interaction-created (first (first rev-events))))
+                 
+                 (is (eq :step-start (first (second rev-events))))
+                 (is (typep (second (second rev-events)) 'gemini:thought-step))
+                 
+                 (is (eq :step-delta (first (third rev-events))))
+                 (is (equal "Hello " (second (third rev-events))))
+                 
+                 (is (eq :step-delta (first (fourth rev-events))))
+                 (is (equal "world" (second (fourth rev-events))))
+                 
+                 (is (eq :step-stop (first (fifth rev-events))))
+                 (is (typep (second (fifth rev-events)) 'gemini:thought-step))
+                 
+                 (is (eq :interaction-completed (first (sixth rev-events)))))
+               
+               ;; Validate session metadata state transition
+               (is (equal "id_streaming_123" (gemini:runtime-session-interaction-id session)))
+               (is (equal "env_streaming_xyz" (gemini:runtime-session-environment-id session)))))
+        
+        ;; Restore original function
+        (setf (fdefinition 'gemini::google-interactions-post-streaming) orig-post-stream)))))
+
+(test test-interactions-backend-retries-malformed-tool-call
+  "Verify that interactions-backend retries malformed_tool_call responses and succeeds on a later attempt."
+  (let ((session (gemini:make-runtime-session))
+        (orig-google-post #'google:google-post)
+        (calls 0)
+  (gemini::+interactions-malformed-tool-call-max-retries+ 5))
+    (gemini:with-runtime-session (session)
+      (unwind-protect
+           (progn
+             (setf (fdefinition 'google:google-post)
+                   (lambda (url key payload &key api-revision read-timeout connect-timeout)
+                     (declare (ignore url key payload api-revision read-timeout connect-timeout))
+                     (incf calls)
+                     (if (= calls 1)
+                         (error "HTTP 400 bad request. {\"error\":{\"message\":\"Model generated invalid JSON syntax and the output could not be parsed.\",\"code\":\"malformed_tool_call\"}}")
+                         (gemini::object
+                          :id "retry_ok"
+                          :steps (vector (gemini::object
+                                          :type "model_output"
+                                          :index 0
+                                          :content (gemini::object
+                                                    :parts (vector (gemini::object :text "Recovered")))))))))
+
+             (let ((backend (make-instance 'gemini:interactions-backend))
+                   (dummy-payload (make-hash-table :test 'equal)))
+               (setf (gethash "model" dummy-payload) "gemini-3.5-flash")
+               (multiple-value-bind (response usage)
+                   (gemini:invoke-backend backend "gemini-3.5-flash" dummy-payload)
+                 (declare (ignore usage))
+                 (is (= 2 calls))
+                 (is (equal "Recovered"
+                            (gemini:get-text
+                             (first (gemini:get-parts
+                                     (gemini:get-content (first (gemini:get-candidates response)))))))))))
+        (setf (fdefinition 'google:google-post) orig-google-post)))))
+
+(test test-interactions-backend-does-not-retry-other-bad-request
+  "Verify that interactions-backend does not retry unrelated 400 bad request responses."
+  (let ((session (gemini:make-runtime-session))
+        (orig-google-post #'google:google-post)
+        (calls 0)
+  (gemini::+interactions-malformed-tool-call-max-retries+ 5))
+    (gemini:with-runtime-session (session)
+      (unwind-protect
+           (progn
+             (setf (fdefinition 'google:google-post)
+                   (lambda (&rest args)
+                     (declare (ignore args))
+                     (incf calls)
+                     (error "HTTP 400 bad request. {\"error\":{\"message\":\"schema at top-level must be a boolean or an object\",\"code\":\"invalid_request\"}}")))
+             (let ((backend (make-instance 'gemini:interactions-backend))
+                   (dummy-payload (make-hash-table :test 'equal)))
+               (setf (gethash "model" dummy-payload) "gemini-3.5-flash")
+               (signals error
+                 (gemini:invoke-backend backend "gemini-3.5-flash" dummy-payload))
+               (is (= 1 calls))))
+        (setf (fdefinition 'google:google-post) orig-google-post)))))
+
+(test test-interactions-backend-errors-on-empty-results
+  "Verify that interactions-backend signals when the API returns no result parts instead of silently returning NIL candidates."
+  (let ((session (gemini:make-runtime-session))
+        (orig-google-post #'google:google-post))
+    (gemini:with-runtime-session (session)
+      (unwind-protect
+           (progn
+             (setf (fdefinition 'google:google-post)
+                   (lambda (url key payload &key api-revision read-timeout connect-timeout)
+                     (declare (ignore url key payload api-revision read-timeout connect-timeout))
+                     (gemini::object
+                      :id "empty_result"
+                      :steps #())))
+             (let ((backend (make-instance 'gemini:interactions-backend))
+                   (dummy-payload (make-hash-table :test 'equal)))
+               (setf (gethash "model" dummy-payload) "gemini-3.5-flash")
+               (signals error
+                 (gemini:invoke-backend backend "gemini-3.5-flash" dummy-payload))))
+        (setf (fdefinition 'google:google-post) orig-google-post)))))
+
+(test test-interactions-input-shape-matrix
+  "Probe a range of Interactions input shapes and identify which ones serialize cleanly."
+  (labels ((text-part (text)
+             (gemini::object :type "text" :text text))
+           (text-content (text)
+             (make-instance 'gemini::text-content :text text))
+           (user-input-step (&rest parts)
+             (make-instance 'gemini::user-input-step :content parts))
+           (serialize-input (input)
+             (gemini::request-body->interaction-payload
+              (make-instance 'gemini::request-body
+                             :model "models/gemini-3.5-flash"
+                             :input input)))
+           (serializes-cleanly-p (input)
+             (handler-case
+                 (progn
+                   (serialize-input input)
+                   t)
+               (error () nil))))
+        (let ((cases (list (list "single user_input step"
+                 (list (user-input-step (text-content "hello")))
+                             t)
+               (list "plain string input"
+                 "hello"
+                 t)
+                      (list "two user_input turns"
+                (list (user-input-step (text-content "hello"))
+                  (user-input-step (text-content "follow up")))
+                  nil)
+                      (list "user_input with multiple parts"
+                (list (user-input-step (text-content "hello")
+                       (text-content "world")))
+                            t)
+            (list "bare text parts"
+                (list (text-part "hello"))
+                  t)
+                      (list "legacy content objects"
+                            (list (gemini::object :role "user"
+                                  :parts (vector (text-content "hello"))))
+                            nil))))
+      (dolist (case cases)
+        (destructuring-bind (name input expected) case
+          (let ((actual (serializes-cleanly-p input)))
+            (format t "~&~A => ~A~%" name (if actual "valid" "invalid"))
+            (is (eq expected actual))))))))
+
+(test test-interactions-input-rejects-legacy-content-object
+  "Regression test: the Interactions input must use user_input steps, not legacy content objects."
+  (let ((payload (make-instance 'gemini::request-body
+                                :model "models/gemini-3.5-flash"
+                                :input (list (gemini::object
+                                              :role "user"
+                                              :parts (vector (make-instance 'gemini::text-content
+                                                                            :text "hello")))))))
+    (signals error
+      (gemini::request-body->interaction-payload payload))))
+
+(test test-invoke-interaction-payload
+  "Verify that invoke-interaction constructs payload correctly."
+  (let ((session (gemini:make-runtime-session))
+        (orig-google-post #'google:google-post))
+    (gemini:with-runtime-session (session)
+      (unwind-protect
+           (progn
+             (setf (fdefinition 'google:google-post)
+                   (lambda (url key payload &key api-revision read-timeout connect-timeout)
+                     (declare (ignore url key api-revision read-timeout connect-timeout))
+                     ;; Assert payload fields
+                     (is (equal "models/gemini-3.5-flash" (gethash "model" payload)))
+                     (is (equal "Hello robot" (gethash "input" payload)))
+                     (let ((resp (gemini::object
+                                  :id "mock_id"
+                                  :steps #())))
+                       resp)))
+             
+             ;; Invoke high level API
+             (multiple-value-bind (steps resp)
+                 (gemini:invoke-interaction "Hello robot" :model :gemini-3.5-flash)
+               (declare (ignore steps resp))
+               (is (equal "mock_id" (gemini:runtime-session-interaction-id session)))))
+        (setf (fdefinition 'google:google-post) orig-google-post)))))
+
+(test test-backend-selection-via-config
+  "Verify that setting googleapi slot in config to symbol selects the correct backend class."
+  (let* ((config-interactions (make-instance 'gemini::persona-config :name "int" :googleapi :google-interactions-api))
+         (config-gemini-symbol (make-instance 'gemini::persona-config :name "gem-sym" :googleapi :google-api))
+         (config-openai-symbol (make-instance 'gemini::persona-config :name "op-sym" :googleapi :openai-api :url "http://test"))
+         (config-gemini-bool (make-instance 'gemini::persona-config :name "gem-bool" :googleapi t))
+         (config-openai-bool (make-instance 'gemini::persona-config :name "op-bool" :googleapi nil :url "http://test")))
+    
+    (let ((gen-int (make-instance 'gemini::content-generator :config config-interactions))
+          (gen-gem-sym (make-instance 'gemini::content-generator :config config-gemini-symbol))
+          (gen-op-sym (make-instance 'gemini::content-generator :config config-openai-symbol))
+          (gen-gem-bool (make-instance 'gemini::content-generator :config config-gemini-bool))
+          (gen-op-bool (make-instance 'gemini::content-generator :config config-openai-bool)))
+      
+      (is (typep (gemini::get-backend gen-int) 'gemini:interactions-backend))
+      (is (typep (gemini::get-backend gen-gem-sym) 'gemini:gemini-backend))
+      (is (typep (gemini::get-backend gen-op-sym) 'gemini:openai-backend))
+      (is (typep (gemini::get-backend gen-gem-bool) 'gemini:gemini-backend))
+      (is (typep (gemini::get-backend gen-op-bool) 'gemini:openai-backend)))))
+
+(test test-interactions-backend-contents-payload-translation
+  "Verify that passing a legacy contents-based payload to interactions-backend automatically translates it into a stateful interactions payload."
+  (let ((session (gemini:make-runtime-session))
+        (orig-google-post #'google:google-post))
+    (gemini:with-runtime-session (session)
+      (unwind-protect
+           (progn
+             (setf (fdefinition 'google:google-post)
+                   (lambda (url key payload &key api-revision read-timeout connect-timeout)
+                     (declare (ignore url key api-revision read-timeout connect-timeout))
+                     ;; Assert translated interactions fields
+                     (is (equal "models/gemini-3.5-flash" (gethash "model" payload)))
+                     (is (equal "Translate me!" (gethash "input" payload)))
+                     (let ((resp (gemini::object
+                                  :id "mock_id"
+                                  :steps #())))
+                       resp)))
+             
+             ;; Build legacy payload
+             (let* ((legacy-payload (gemini::object
+                                     :contents (list (gemini::object
+                                                      :role "user"
+                                                      :parts (vector (gemini::object :text "Old turn")))
+                                                     (gemini::object
+                                                      :role "model"
+                                                      :parts (vector (gemini::object :text "Response")))
+                                                     (gemini::object
+                                                      :role "user"
+                                                      :parts (vector (gemini::object :text "Translate me!"))))))
+                    (backend (make-instance 'gemini:interactions-backend)))
+               (multiple-value-bind (steps resp)
+                   (gemini:invoke-backend backend "gemini-3.5-flash" legacy-payload)
+                 (declare (ignore steps resp))
+                 (is (equal "mock_id" (gemini:runtime-session-interaction-id session))))))
+        (setf (fdefinition 'google:google-post) orig-google-post)))))
+
+(test test-interactions-backend-strips-unsupported-gemini-fields
+  "Verify that Gemini-only legacy fields are removed before posting to the Interactions API."
+  (let ((session (gemini:make-runtime-session))
+        (orig-google-post #'google:google-post))
+    (gemini:with-runtime-session (session)
+      (unwind-protect
+           (progn
+             (setf (fdefinition 'google:google-post)
+                   (lambda (url key payload &key api-revision read-timeout connect-timeout)
+                     (declare (ignore url key api-revision read-timeout connect-timeout))
+                     (is (null (gethash "systemInstruction" payload)))
+                     (is (null (gethash "generationConfig" payload)))
+                     (is (null (gethash "safetySettings" payload)))
+                     (is (null (gethash "cachedContent" payload)))
+                     (is (null (gethash "toolConfig" payload)))
+                     (is (equal "models/gemini-3.5-flash" (gethash "model" payload)))
+                     (is (equal "Translate me!" (gethash "input" payload)))
+                      (gemini::object :id "mock_id" :steps #())))
+
+             (let* ((legacy-payload
+                      (gemini::object
+                       :contents (list (gemini::object
+                                        :role "user"
+                                        :parts (vector (gemini::object :text "Translate me!"))))
+                       :system-instruction (list "Keep the noir tone.")
+                       :generation-config (gemini::object :temperature 0.2)
+                       :safety-settings (list (gemini::object :category "HARM_CATEGORY_HATE_SPEECH"
+                                                              :threshold "BLOCK_ONLY_HIGH"))
+                       :cached-content "cached/123"
+                       :tool-config (gemini::object :function-calling-config
+                                                    (gemini::object :mode "AUTO"))))
+                    (backend (make-instance 'gemini:interactions-backend)))
+               (multiple-value-bind (steps resp)
+                   (gemini:invoke-backend backend "gemini-3.5-flash" legacy-payload)
+                 (declare (ignore steps resp))
+                 (is (equal "mock_id" (gemini:runtime-session-interaction-id session))))))
+        (setf (fdefinition 'google:google-post) orig-google-post)))))
+
+(test test-interactions-backend-zero-arg-tool-translation
+  "Verify that zero-argument function tools omit an empty required array for Interactions."
+  (let ((session (gemini:make-runtime-session))
+        (orig-google-post #'google:google-post))
+    (gemini:with-runtime-session (session)
+      (unwind-protect
+           (progn
+             (setf (fdefinition 'google:google-post)
+                   (lambda (url key payload &key api-revision read-timeout connect-timeout)
+                     (declare (ignore url key api-revision read-timeout connect-timeout))
+                     (let* ((tools (gemini::adapter-field payload "tools" :tools))
+                            (tool (car (gemini::adapter-as-list tools)))
+                            (params (gemini::adapter-field tool "parameters" :parameters)))
+                       (is (equal "function" (gemini::adapter-field tool "type" :type)))
+                       (is (equal "read_graph" (gemini::adapter-field tool "name" :name)))
+                       (is (equal "object" (gemini::adapter-field params "type" :type)))
+                       (is (null (gemini::adapter-field params "required" :required))))
+                     (gemini::object :id "mock_id" :steps #())))
+
+             (let* ((declaration
+                      (gemini::object
+                       :name "read_graph"
+                       :description "Read the entire knowledge graph"
+                       :parameters (gemini::object
+                                    :type 6
+                                    :properties (gemini::object)
+                                    :required '())))
+                    (legacy-payload
+                      (gemini::object
+                       :model "gemini-3.5-flash"
+                       :input "hello"
+                       :tools (list
+                               (gemini::object
+                                :function-declarations (list declaration)))))
+                    (backend (make-instance 'gemini:interactions-backend)))
+               (gemini:invoke-backend backend "gemini-3.5-flash" legacy-payload)))
+        (setf (fdefinition 'google:google-post) orig-google-post)))))
+
+(test test-interactions-backend-zero-arg-tool-default-parameters
+  "Verify that zero-argument tools without declared parameters still emit an empty object schema."
+  (let ((session (gemini:make-runtime-session))
+        (orig-google-post #'google:google-post))
+    (gemini:with-runtime-session (session)
+      (unwind-protect
+           (progn
+             (setf (fdefinition 'google:google-post)
+                   (lambda (url key payload &key api-revision read-timeout connect-timeout)
+                     (declare (ignore url key api-revision read-timeout connect-timeout))
+                     (let* ((tools (gemini::adapter-field payload "tools" :tools))
+                            (tool (car (gemini::adapter-as-list tools)))
+                            (params (gemini::adapter-field tool "parameters" :parameters))
+                            (properties (and params (gemini::adapter-field params "properties" :properties))))
+                       (is (equal "function" (gemini::adapter-field tool "type" :type)))
+                       (is (equal "currentDirectory" (gemini::adapter-field tool "name" :name)))
+                       (is (equal "object" (gemini::adapter-field params "type" :type)))
+                       (is (hash-table-p properties))
+                       (is (= 0 (hash-table-count properties)))
+                       (is (null (gemini::adapter-field params "required" :required))))
+                     (gemini::object :id "mock_id" :steps #())))
+
+             (let* ((declaration
+                      (gemini::object
+                       :name "currentDirectory"
+                       :description "Returns the current directory pathname."))
+                    (legacy-payload
+                      (gemini::object
+                       :model "gemini-3.5-flash"
+                       :input "hello"
+                       :tools (list
+                               (gemini::object
+                                :function-declarations (list declaration)))))
+                    (backend (make-instance 'gemini:interactions-backend)))
+               (gemini:invoke-backend backend "gemini-3.5-flash" legacy-payload)))
+        (setf (fdefinition 'google:google-post) orig-google-post)))))
+
+(test test-interactions-backend-tools-translation
+  "Verify that passing legacy tools schemas to interactions-backend translates them flatly to 'type: function' format."
+  (let ((session (gemini:make-runtime-session))
+        (orig-google-post #'google:google-post))
+    (gemini:with-runtime-session (session)
+      (unwind-protect
+           (progn
+             (setf (fdefinition 'google:google-post)
+                   (lambda (url key payload &key api-revision read-timeout connect-timeout)
+                     (declare (ignore url key api-revision read-timeout connect-timeout))
+                     ;; Assert tools are translated correctly
+                     (let* ((tools (gemini::adapter-field payload "tools" :tools))
+                            (tool (car (gemini::adapter-as-list tools)))
+                            (params (gemini::adapter-field tool "parameters" :parameters))
+                            (properties (gemini::adapter-field params "properties" :properties))
+                            (inner-type-param (gemini::adapter-field properties "type" :type)))
+                       (is (equal "function" (gemini::adapter-field tool "type" :type)))
+                       (is (equal "create_entities" (gemini::adapter-field tool "name" :name)))
+                       (is (equal "Create entities" (gemini::adapter-field tool "description" :description)))
+                       (is (equal "object" (gemini::adapter-field params "type" :type)))
+                       (is (equal "string" (gemini::adapter-field inner-type-param "type" :type))))
+                     (let ((resp (gemini::object :id "mock_id" :steps #())))
+                       resp)))
+             
+             (let* ((legacy-payload (gemini::object
+                                     :model "gemini-3.5-flash"
+                                     :input (list (make-instance 'gemini::user-input-step
+                                                                 :content (list (make-instance 'gemini::text-content :text "hi"))))
+                                     :tools (list (gemini::object
+                                                   :function-declarations (list (gemini::object
+                                                                                 :name "create_entities"
+                                                                                 :description "Create entities"
+                                                                                 :parameters (gemini::object
+                                                                                              :type 6
+                                                                                              :properties (gemini::object
+                                                                                                           :type (gemini::object :type 1 :description "A string parameter name type")))))))))
+                    (backend (make-instance 'gemini:interactions-backend)))
+               (gemini:invoke-backend backend "gemini-3.5-flash" legacy-payload)))
+        (setf (fdefinition 'google:google-post) orig-google-post)))))

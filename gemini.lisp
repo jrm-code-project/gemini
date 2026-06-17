@@ -123,8 +123,44 @@
 
 (defun multiprompt (generator prompt-list &optional last-part)
   (if (null prompt-list)
-        last-part
-        (let ((response (if last-part
-                            (funcall generator (list (car prompt-list) last-part))
-                            (funcall generator (car prompt-list)))))
-          (multiprompt generator (cdr prompt-list) (content->text response)))))
+      last-part
+      (let ((response (if last-part
+                          (funcall generator (list (car prompt-list) last-part))
+                          (funcall generator (car prompt-list)))))
+        (multiprompt generator (cdr prompt-list) (content->text response)))))
+
+(defun resolve-model-string (model)
+  (typecase model
+    (null nil)
+    (string model)
+    (symbol
+     (let* ((name (string-downcase (symbol-name model)))
+            (clean-name (if (and (> (length name) 7) (string= (subseq name 0 7) "gemini-"))
+                            name
+                            name)))
+       ;; check if registered
+       (let ((m (find-model clean-name)))
+         (if m
+             (get-model-id m)
+             (let ((m2 (find-model (concatenate 'string "models/" clean-name))))
+               (if m2
+                   (get-model-id m2)
+                   (concatenate 'string "models/" clean-name)))))))))
+
+(defun invoke-interaction (prompt &key (model :gemini-3.5-flash) agent background tool-configs receiver)
+  "Sends a stateful prompt using the Interactions API.
+   Returns (values steps raw-response)."
+  (let* ((backend (make-instance 'interactions-backend))
+         (payload (make-hash-table :test 'equal)))
+    (assert (or model agent) nil "Must specify either model or agent.")
+    (if agent
+        (setf (gethash "agent" payload) (string-downcase (string-upcase (princ-to-string agent))))
+        (setf (gethash "model" payload) (resolve-model-string model)))
+    
+    (setf (gethash "input" payload) (build-interactions-input prompt))
+      
+    (when background
+      (setf (gethash "background" payload) t))
+    (when tool-configs
+      (setf (gethash "tools" payload) tool-configs))
+    (invoke-backend backend (or agent model) payload :receiver receiver)))

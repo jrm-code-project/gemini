@@ -651,6 +651,11 @@
 (defclass runtime-session ()
   ((context :initarg :context :accessor runtime-session-context :initform '())
    (prior-context :initarg :prior-context :accessor runtime-session-prior-context :initform '())
+   ;; Interactions API extensions
+   (interaction-id :initarg :interaction-id :accessor runtime-session-interaction-id :initform nil)
+   (agent-id :initarg :agent-id :accessor runtime-session-agent-id :initform nil)
+   (environment-id :initarg :environment-id :accessor runtime-session-environment-id :initform nil)
+   ;; Standard slots
    (model :initarg :model :accessor runtime-session-model :initform nil)
    (prior-model :initarg :prior-model :accessor runtime-session-prior-model :initform nil)
    (chat-persona :initarg :chat-persona :accessor runtime-session-chat-persona :initform nil)
@@ -666,6 +671,9 @@
 
 (defun make-runtime-session (&key (context '())
                                   (prior-context '())
+                                  (interaction-id nil)
+                                  (agent-id nil)
+                                  (environment-id nil)
                                   (model nil)
                                   (prior-model nil)
                                   (conversation-topic "a general discussion about miscellaneous topics"))
@@ -673,6 +681,9 @@
   (make-instance 'runtime-session
                  :context context
                  :prior-context prior-context
+                 :interaction-id interaction-id
+                 :agent-id agent-id
+                 :environment-id environment-id
                  :model model
                  :prior-model prior-model
                  :conversation-topic conversation-topic))
