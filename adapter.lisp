@@ -27,14 +27,152 @@ Supports hash-tables and alists with mixed string/keyword keys."
         (t nil)))
 
 (defun validate-gemini-payload-shape (payload)
-  "Performs lightweight adapter preflight checks on Gemini-style payload shape."
-  (unless (hash-table-p payload)
-    (error "Payload must be a hash-table object, got ~s" (type-of payload)))
-  (let* ((contents (get-contents payload))
-         (content-list (adapter-as-list contents)))
-    (dolist (entry content-list)
-      (unless (content? entry)
-        (error "Payload contains non-content entry: ~s" entry)))))
+  "Performs detailed preflight checks on Gemini-style payload structure, required fields, and types."
+  (labels ((v-error (path fmt &rest args)
+             (error "Payload validation error at ~a: ~?" path fmt args))
+           
+           (check-string (value path field-name)
+             (unless (stringp value)
+               (v-error path "field ~a must be a string, got ~s" field-name value)))
+           
+           (check-integer (value path field-name &key min)
+             (unless (integerp value)
+               (v-error path "field ~a must be an integer, got ~s" field-name value))
+             (when (and min (< value min))
+               (v-error path "field ~a must be >= ~d, got ~d" field-name min value)))
+               
+           (check-number (value path field-name &key min max)
+             (unless (numberp value)
+               (v-error path "field ~a must be a number, got ~s" field-name value))
+             (when (and min (< value min))
+               (v-error path "field ~a must be >= ~f, got ~f" field-name min value))
+             (when (and max (> value max))
+               (v-error path "field ~a must be <= ~f, got ~f" field-name max value)))
+
+           (validate-blob (blob path)
+             (unless (or (hash-table-p blob) (consp blob))
+               (v-error path "blob must be an object, got ~s" (type-of blob)))
+             (let ((mime-type (adapter-field blob :mime-type "mimeType"))
+                   (data (adapter-field blob :data "data")))
+               (unless mime-type
+                 (v-error path "blob is missing required field 'mimeType'"))
+               (check-string mime-type (format nil "~a.mimeType" path) "mimeType")
+               (unless data
+                 (v-error path "blob is missing required field 'data'"))
+               (check-string data (format nil "~a.data" path) "data")))
+
+           (validate-file-data (fd path)
+             (unless (or (hash-table-p fd) (consp fd))
+               (v-error path "fileData must be an object, got ~s" (type-of fd)))
+             (let ((file-uri (adapter-field fd :file-uri "fileUri"))
+                   (mime-type (adapter-field fd :mime-type "mimeType")))
+               (unless file-uri
+                 (v-error path "fileData is missing required field 'fileUri'"))
+               (check-string file-uri (format nil "~a.fileUri" path) "fileUri")
+               (when mime-type
+                 (check-string mime-type (format nil "~a.mimeType" path) "mimeType"))))
+
+           (validate-function-call (fc path)
+             (unless (or (hash-table-p fc) (consp fc))
+               (v-error path "functionCall must be an object, got ~s" (type-of fc)))
+             (let ((name (adapter-field fc :name "name"))
+                   (args (adapter-field fc :args "args")))
+               (unless name
+                 (v-error path "functionCall is missing required field 'name'"))
+               (check-string name (format nil "~a.name" path) "name")
+               (when args
+                 (unless (or (hash-table-p args) (consp args))
+                   (v-error (format nil "~a.args" path) "function args must be an object/alist, got ~s" (type-of args))))))
+
+           (validate-function-response (fr path)
+             (unless (or (hash-table-p fr) (consp fr))
+               (v-error path "functionResponse must be an object, got ~s" (type-of fr)))
+             (let ((name (adapter-field fr :name "name"))
+                   (response (adapter-field fr :response "response")))
+               (unless name
+                 (v-error path "functionResponse is missing required field 'name'"))
+               (check-string name (format nil "~a.name" path) "name")
+               (unless response
+                 (v-error path "functionResponse is missing required field 'response'"))
+               (unless (or (hash-table-p response) (consp response))
+                 (v-error (format nil "~a.response" path) "function response must be an object/alist, got ~s" (type-of response)))))
+
+           (validate-part (part path)
+             (unless (or (hash-table-p part) (consp part))
+               (v-error path "part must be an object, got ~s" (type-of part)))
+             (let ((text (adapter-field part :text "text"))
+                   (inline-data (adapter-field part :inline-data "inlineData"))
+                   (file-data (adapter-field part :file-data "fileData"))
+                   (function-call (adapter-field part :function-call "functionCall"))
+                   (function-response (adapter-field part :function-response "functionResponse")))
+               (cond (text
+                      (check-string text (format nil "~a.text" path) "text"))
+                     (inline-data
+                      (validate-blob inline-data (format nil "~a.inlineData" path)))
+                     (file-data
+                      (validate-file-data file-data (format nil "~a.fileData" path)))
+                     (function-call
+                      (validate-function-call function-call (format nil "~a.functionCall" path)))
+                     (function-response
+                      (validate-function-response function-response (format nil "~a.functionResponse" path)))
+                     (t
+                      (v-error path "part must contain one of: text, inlineData, fileData, functionCall, functionResponse")))))
+
+           (validate-content (content path)
+             (unless (or (hash-table-p content) (consp content))
+               (v-error path "content entry must be an object, got ~s" (type-of content)))
+             (let ((role (adapter-field content :role "role"))
+                   (parts (adapter-field content :parts "parts")))
+               (when role
+                 (check-string role (format nil "~a.role" path) "role"))
+               (unless parts
+                 (v-error path "content entry is missing required field 'parts'"))
+               (let ((part-list (adapter-as-list parts)))
+                 (unless part-list
+                   (v-error (format nil "~a.parts" path) "parts list cannot be empty"))
+                 (loop for part in part-list
+                       for i from 0
+                       do (validate-part part (format nil "~a.parts[~d]" path i))))))
+
+           (validate-generation-config (config path)
+             (unless (or (hash-table-p config) (consp config))
+               (v-error path "generationConfig must be an object, got ~s" (type-of config)))
+             (let ((temp (adapter-field config :temperature "temperature"))
+                   (top-p (adapter-field config :top-p "topP"))
+                   (top-k (adapter-field config :top-k "topK"))
+                   (max-tokens (adapter-field config :max-output-tokens "maxOutputTokens"))
+                   (candidate-count (adapter-field config :candidate-count "candidateCount"))
+                   (stop-seqs (adapter-field config :stop-sequences "stopSequences")))
+               (when temp (check-number temp (format nil "~a.temperature" path) "temperature" :min 0.0 :max 2.0))
+               (when top-p (check-number top-p (format nil "~a.topP" path) "topP" :min 0.0 :max 1.0))
+               (when top-k (check-integer top-k (format nil "~a.topK" path) "topK" :min 1))
+               (when max-tokens (check-integer max-tokens (format nil "~a.maxOutputTokens" path) "maxOutputTokens" :min 1))
+               (when candidate-count (check-integer candidate-count (format nil "~a.candidateCount" path) "candidateCount" :min 1))
+               (when stop-seqs
+                 (let ((seq-list (adapter-as-list stop-seqs)))
+                   (loop for seq in seq-list
+                         for i from 0
+                         do (check-string seq (format nil "~a.stopSequences[~d]" path i) "stopSequence")))))))
+
+    ;; Top level checks
+    (unless (or (hash-table-p payload) (consp payload))
+      (v-error "<root>" "Payload must be a hash-table or alist object, got ~s" (type-of payload)))
+    
+    (let ((contents (adapter-field payload :contents "contents"))
+          (gen-config (adapter-field payload :generation-config "generationConfig"))
+          (sys-inst (adapter-field payload :system-instruction "systemInstruction")))
+      
+      (when contents
+        (let ((content-list (adapter-as-list contents)))
+          (loop for entry in content-list
+                for i from 0
+                do (validate-content entry (format nil "contents[~d]" i)))))
+              
+      (when gen-config
+        (validate-generation-config gen-config "generationConfig"))
+        
+      (when sys-inst
+        (validate-content sys-inst "systemInstruction")))))
 
 (defun openai-role->gemini-role (role)
   "Maps OpenAI chat role strings to Gemini roles."

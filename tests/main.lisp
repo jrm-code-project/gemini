@@ -682,10 +682,58 @@
     (is (= 20 (gemini::get-candidates-token-count usage)))))
 
 (test adapter-payload-preflight-validation
-  "Test shared adapter payload validation rejects non-content entries."
-  (signals error
+  "Test shared adapter payload validation rejects non-content entries and invalid field values."
+  ;; 1. Valid payload should pass
+  (finishes
     (gemini::validate-gemini-payload-shape
-     (gemini::object :contents (list "not-content")))))
+     (gemini::object :contents (list (gemini::content :role "user" :parts (list (part "hello")))))))
+
+  ;; 2. Non-content entries (not object)
+  (is (not (null (search "contents[0]"
+                         (handler-case (progn (gemini::validate-gemini-payload-shape (gemini::object :contents (list "not-content"))) "")
+                           (error (e) (format nil "~a" e)))))))
+
+  ;; 3. Missing parts inside content entry
+  (is (not (null (search "missing required field 'parts'"
+                         (handler-case (progn (gemini::validate-gemini-payload-shape (gemini::object :contents (list (gemini::object :role "user")))) "")
+                           (error (e) (format nil "~a" e)))))))
+
+  ;; 4. Invalid parts inside content entry
+  (is (not (null (search "part must contain one of"
+                         (handler-case (progn (gemini::validate-gemini-payload-shape 
+                                               (gemini::object :contents (list (gemini::object :role "user" :parts (list (gemini::object :invalid-part-field 123))))))
+                                              "")
+                           (error (e) (format nil "~a" e)))))))
+
+  ;; 5. Invalid text type inside text part
+  (is (not (null (search "must be a string"
+                         (handler-case (progn (gemini::validate-gemini-payload-shape 
+                                               (gemini::object :contents (list (gemini::object :role "user" :parts (list (gemini::object :text 12345))))))
+                                              "")
+                           (error (e) (format nil "~a" e)))))))
+
+  ;; 6. Invalid generation-config temperature
+  (is (not (null (search "must be <= 2.0"
+                         (handler-case (progn (gemini::validate-gemini-payload-shape 
+                                               (gemini::object :contents (list (gemini::content :role "user" :parts (list (part "hello"))))
+                                                               :generation-config (gemini::object :temperature 2.5)))
+                                              "")
+                           (error (e) (format nil "~a" e)))))))
+
+  ;; 7. Invalid generation-config candidateCount
+  (is (not (null (search "must be >= 1"
+                         (handler-case (progn (gemini::validate-gemini-payload-shape 
+                                               (gemini::object :contents (list (gemini::content :role "user" :parts (list (part "hello"))))
+                                                               :generation-config (gemini::object :candidate-count 0)))
+                                              "")
+                           (error (e) (format nil "~a" e)))))))
+
+  ;; 8. Invalid blob mimeType inside inlineData
+  (is (not (null (search "missing required field 'mimeType'"
+                         (handler-case (progn (gemini::validate-gemini-payload-shape 
+                                               (gemini::object :contents (list (gemini::object :role "user" :parts (list (gemini::object :inline-data (gemini::object :data "abc")))))))
+                                              "")
+                           (error (e) (format nil "~a" e))))))))
 
 (test gemini-backend-mock-test
   "Test the gemini-backend CLOS implementation with mocked %%invoke-gemini responses."

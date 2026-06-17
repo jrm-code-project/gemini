@@ -274,6 +274,7 @@ Handles keyword and string key variants."
 
 (defmethod invoke-backend ((backend gemini-backend) model-id payload &key (read-timeout 300) (connect-timeout 60) &allow-other-keys)
   "Invokes the Google Gemini API backend."
+  (validate-gemini-payload-shape payload)
   (let* ((model-obj (ensure-model model-id))
          (actual-model-id (get-model-id model-obj))
          (response (%%invoke-gemini actual-model-id payload :read-timeout read-timeout :connect-timeout connect-timeout)))
