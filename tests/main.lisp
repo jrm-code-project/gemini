@@ -619,9 +619,10 @@
   "Test that schema constructors normalize required fields into a flat vector of strings."
   (let* ((schema (gemini::schema :type :object
                                  :properties (gemini::object
-                                              :directory (gemini::schema :type :string))
-                                 :required (vector #(:directory) "pathname"))))
-    (is (equalp #("directory" "pathname") (gemini::get-required schema)))))
+                                              :directory (gemini::schema :type :string)
+                                              :mime-type (gemini::schema :type :string))
+                                 :required (vector #(:directory) "pathname" :mime-type))))
+    (is (equalp #("directory" "pathname" "mimeType") (gemini::get-required schema)))))
 
 (test adapter-openai-response-normalization
   "Test shared adapter normalization for OpenAI responses and usage aliases."
