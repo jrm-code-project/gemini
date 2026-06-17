@@ -78,6 +78,51 @@ Supports hash-tables and alists with mixed string/keyword keys."
     (object :role (gemini-role->openai-role (adapter-field content :role "role"))
             :content text)))
 
+(defun openai-schema-type-string (type)
+  "Normalizes a schema type value to the lowercase string expected by OpenAI tool schemas."
+  (cond ((integerp type)
+         (ecase type
+           (0 "unspecified")
+           (1 "string")
+           (2 "number")
+           (3 "integer")
+           (4 "boolean")
+           (5 "array")
+           (6 "object")))
+        ((keywordp type)
+         (string-downcase (symbol-name type)))
+        ((symbolp type)
+         (string-downcase (symbol-name type)))
+        ((stringp type)
+         (string-downcase type))
+        (t type)))
+
+(defun normalize-openai-schema (schema)
+  "Recursively converts an internal schema object to an OpenAI-compatible JSON schema."
+  (cond ((hash-table-p schema)
+         (let ((normalized (object)))
+           (maphash (lambda (key value)
+                      (setf (gethash key normalized)
+                            (if (or (equal key :type)
+                                    (equal key "type"))
+                                (openai-schema-type-string value)
+                                (normalize-openai-schema value))))
+                    schema)
+           normalized))
+        ((consp schema)
+         (mapcar (lambda (entry)
+                   (if (consp entry)
+                       (cons (car entry)
+                             (if (or (equal (car entry) :type)
+                                     (equal (car entry) "type"))
+                                 (openai-schema-type-string (cdr entry))
+                                 (normalize-openai-schema (cdr entry))))
+                       entry))
+                 schema))
+        ((vectorp schema)
+         (map 'vector #'normalize-openai-schema schema))
+        (t schema)))
+
 (defun gemini-tools->openai-tools (gemini-tools)
   "Translates Gemini function declarations into OpenAI tool descriptors."
   (let ((openai-tools nil))
@@ -87,8 +132,9 @@ Supports hash-tables and alists with mixed string/keyword keys."
           (push (object :type "function"
                         :function (object :name (get-name decl)
                                           :description (get-description decl)
-                                          :parameters (or (get-parameters decl)
-                                                          (get-parameters-json-schema decl))))
+                                          :parameters (normalize-openai-schema
+                                                       (or (get-parameters-json-schema decl)
+                                                           (get-parameters decl)))))
                 openai-tools))))
     (nreverse openai-tools)))
 

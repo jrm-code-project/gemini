@@ -594,6 +594,27 @@
     (is (> (length tools) 0))
     (is (equal "function" (gemini::get-type (elt tools 0))))))
 
+(test openai-tool-schema-normalization
+  "Test that internal schema type encodings are normalized before OpenAI tool serialization."
+  (let* ((payload (gemini::object
+                   :tools (vector
+                           (gemini::object
+                            :function-declarations
+                            (vector (gemini::function-declaration
+                                     :name "machineType"
+                                     :description "returns machine type"
+                                     :parameters (gemini::schema :type :object
+                                                                 :properties (gemini::object
+                                                                              :detail (gemini::schema :type :string)))))))))
+         (openai (gemini::build-openai-payload "mock-model" payload))
+         (tool (elt (gemini::get-tools openai) 0))
+         (function (gemini::openai-field tool :function "function"))
+         (parameters (gemini::openai-field function :parameters "parameters"))
+         (properties (gemini::openai-field parameters :properties "properties"))
+         (detail-schema (gemini::openai-field properties :detail "detail")))
+    (is (equal "object" (gemini::openai-field parameters :type "type")))
+    (is (equal "string" (gemini::openai-field detail-schema :type "type")))))
+
 (test adapter-openai-response-normalization
   "Test shared adapter normalization for OpenAI responses and usage aliases."
   (let* ((decoded (jsonx:with-decoder-jrm-semantics
