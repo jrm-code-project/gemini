@@ -77,6 +77,7 @@
     :depends-on ("infrastructure" "transport" "adapters" "tools")
     :components
     ((:file "gemini-core")
+     (:file "interaction"    :depends-on ("gemini-core"))
      (:file "gemini-personas")
      (:file "gemini-chatbot" :depends-on ("gemini-personas"))
      (:file "gemini-iridium")
@@ -85,7 +86,8 @@
                                          "gemini-personas"
                                          "gemini-chatbot"
                                          "gemini-iridium"
-                                         "uroboros"))))
+                                         "uroboros"
+                                         "interaction"))))
 
    (:module "apps"
     :pathname ""

@@ -595,6 +595,24 @@
   ((url :initarg :url :accessor get-backend-url :initform nil))
   (:documentation "Concrete backend implementation for OpenAI/LM-Studio APIs."))
 
+(defclass interactions-backend (backend)
+  ()
+  (:documentation "Backend using the stateful Google Gemini Interactions API."))
+
+(defun resolve-backend-instance (config)
+  (let ((api (get-googleapi config)))
+    (cond ((eq api :google-interactions-api)
+           (make-instance 'interactions-backend))
+          ((eq api :google-api)
+           (make-instance 'gemini-backend))
+          ((eq api :openai-api)
+           (make-instance 'openai-backend :url (get-url config)))
+          ;; Backwards-compatibility with booleans
+          (api
+           (make-instance 'gemini-backend))
+          (t
+           (make-instance 'openai-backend :url (get-url config))))))
+
 (defclass content-generator ()
   ((config :initarg :config :accessor get-config)
    (memory-mcp-server :reader get-memory-mcp-server)
@@ -618,18 +636,14 @@
       (setf (slot-value instance 'memory-mcp-server)
             (memory-mcp-server (persona-memory-file effective-config)))
       (setf (slot-value instance 'backend)
-            (if (get-googleapi effective-config)
-                (make-instance 'gemini-backend)
-                (make-instance 'openai-backend :url (get-url effective-config)))))))
+            (resolve-backend-instance effective-config)))))
 
 (defmethod get-backend ((object content-generator))
   (if (and (slot-boundp object 'backend) (slot-value object 'backend))
       (slot-value object 'backend)
       (let ((config (get-config object)))
         (setf (slot-value object 'backend)
-              (if (get-googleapi config)
-                  (make-instance 'gemini-backend)
-                  (make-instance 'openai-backend :url (get-url config)))))))
+              (resolve-backend-instance config)))))
 
 (defmethod get-bowdlerize ((object content-generator))
   (get-bowdlerize (get-config object)))
