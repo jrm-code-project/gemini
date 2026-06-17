@@ -514,6 +514,25 @@
                         (gemini::%generate-content gemini::*gemini-flash* nil nil "thin loop" nil nil nil nil 0)))
       (setf (fdefinition 'gemini::%invoke-gemini) orig-invoke))))
 
+(test generate-content-large-thoughts-thin-response-retry
+  "Test that a response with very large thoughts count (> 10000) and < 2 candidate tokens triggers a retry/continuation."
+  (let ((orig-invoke #'gemini::%invoke-gemini)
+        (gemini::*generation-recursion-hard-limit* 2)
+        (gemini::*echo-result* nil))
+    (unwind-protect
+         (progn
+           (setf (fdefinition 'gemini::%invoke-gemini)
+                 (lambda (content-generator model-id payload &key read-timeout connect-timeout)
+                   (declare (ignore content-generator model-id payload read-timeout connect-timeout))
+                   (values
+                    (gemini::object :candidates
+                                    (list (gemini::object :content (gemini::content :role "model" :parts (list (part ""))))))
+                    (gemini::object :prompt-token-count 1 :thoughts-token-count 15000 :candidates-token-count 0))))
+           ;; This should signal generation-recursion-limit-exceeded because it retries recursively
+           (signals gemini::generation-recursion-limit-exceeded
+             (gemini::%generate-content gemini::*gemini-flash* nil nil "large thoughts thin loop" nil nil nil nil 0)))
+      (setf (fdefinition 'gemini::%invoke-gemini) orig-invoke))))
+
 (test generate-content-function-call-loop-hits-hard-limit
   "Test that repeated function-call recursion paths share the same hard recursion budget."
   (let ((orig-invoke #'gemini::%invoke-gemini)

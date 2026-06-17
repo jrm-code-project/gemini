@@ -946,7 +946,6 @@ Handles keyword and string key variants."
               (when usage-metadata
 
                 (when (and (> (or (get-thoughts-token-count usage-metadata) 0) 10)
-                           (< (or (get-thoughts-token-count usage-metadata) 0) 10000)
                            (< (or (get-candidates-token-count usage-metadata) 0) 2)
                            (< depth 5))
                   (log-info "Response has lots of thoughts (~a tokens) but very little content (~a token~:*~P). Continuing prompt."
