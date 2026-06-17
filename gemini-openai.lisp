@@ -125,17 +125,17 @@
 (defun openai-usage->gemini-usage (usage)
   "Normalizes OpenAI usage object fields to Gemini usage metadata keys."
   (when usage
-    (let* ((prompt-tokens (or (openai-field usage "prompt_tokens" :prompt_tokens)
+    (let* ((prompt-tokens (or (openai-field usage "prompt_tokens" :prompt_tokens :prompt-tokens :prompt--tokens)
                               (openai-field usage "promptTokens" :promptTokens)
                               (openai-field usage "input_tokens" :input_tokens)))
-           (completion-tokens (or (openai-field usage "completion_tokens" :completion_tokens)
+           (completion-tokens (or (openai-field usage "completion_tokens" :completion_tokens :completion-tokens :completion--tokens)
                                   (openai-field usage "completionTokens" :completionTokens)
                                   (openai-field usage "total_output_tokens" :response_tokens :responseTokens)))
            ;; Grab the reasoning details
-           (details (openai-field usage "completion_tokens_details" :completion_tokens_details))
-           (reasoning-tokens (or (openai-field usage "reasoning_tokens" :reasoning_tokens)
+           (details (openai-field usage "completion_tokens_details" :completion_tokens_details :completion-tokens-details :completion--tokens--details))
+           (reasoning-tokens (or (openai-field usage "reasoning_tokens" :reasoning_tokens :reasoning-tokens :reasoning--tokens)
                                  (and (hash-table-p details) 
-                                      (openai-field details "reasoning_tokens" :reasoning_tokens)))))
+                                      (openai-field details "reasoning_tokens" :reasoning_tokens :reasoning-tokens :reasoning--tokens)))))
       (let ((usage-metadata (object)))
         (when prompt-tokens
           (setf (get-prompt-token-count usage-metadata) prompt-tokens))
@@ -152,40 +152,41 @@
 (defun openai-response->gemini-response (json-string)
   "Converts an OpenAI chat response JSON string into Gemini-style response objects."
   (handler-case
-      (let* ((data (cl-json:decode-json-from-string json-string))
-             (choices (or (openai-field data "choices" :choices) #()))
-             (choice-list (typecase choices
-                            (cons choices)
-                            (vector (coerce choices 'list))
-                            (t nil)))
-             (candidates
-               (mapcar
-                (lambda (choice)
-                  (let* ((message (openai-field choice "message" :message))
-                         (role (openai-role->gemini-role (openai-field message "role" :role)))
-                         (raw-content (or (openai-field message "content" :content) ""))
-                         ;; NEW: Extract thoughts if they exist
-                         (raw-thoughts (openai-field message "reasoning_content" :reasoning_content :reasoning))
-                         (text (if (stringp raw-content)
-                                   raw-content
-                                   (format nil "~s" (dehashify raw-content))))
-                         ;; Build the parts list properly
-                         (parts (remove nil 
-                                        (list (when (and (stringp raw-thoughts) (not (string= "" raw-thoughts)))
-                                                (thought raw-thoughts))
-                                              (part text))))
-                         (candidate (object :content (content :role role
-                                                              :parts parts))))
-                    ;; ... (rest of the index and finish-reason logic)
-                    candidate))
-                choice-list))
-             (response (object :candidates candidates))
-             (usage-metadata (openai-usage->gemini-usage (openai-field data "usage" :usage)))
-             (model-name (or (openai-field data "model" :model)
-                             (openai-field data "model_name" :model_name))))
-        (when model-name
-          (setf (get-model-version response) model-name))
-        (values response usage-metadata))
+      (with-decoder-jrm-semantics
+        (let* ((data (cl-json:decode-json-from-string json-string))
+               (choices (or (openai-field data "choices" :choices) #()))
+               (choice-list (typecase choices
+                              (cons choices)
+                              (vector (coerce choices 'list))
+                              (t nil)))
+               (candidates
+                 (mapcar
+                  (lambda (choice)
+                    (let* ((message (openai-field choice "message" :message))
+                           (role (openai-role->gemini-role (openai-field message "role" :role)))
+                           (raw-content (or (openai-field message "content" :content) ""))
+                           ;; NEW: Extract thoughts if they exist
+                           (raw-thoughts (openai-field message "reasoning_content" :reasoning_content :reasoning-content :reasoning--content :reasoning))
+                           (text (if (stringp raw-content)
+                                     raw-content
+                                     (format nil "~s" (dehashify raw-content))))
+                           ;; Build the parts list properly
+                           (parts (remove nil 
+                                          (list (when (and (stringp raw-thoughts) (not (string= "" raw-thoughts)))
+                                                  (thought raw-thoughts))
+                                                (part text))))
+                           (candidate (object :content (content :role role
+                                                                :parts parts))))
+                      ;; ... (rest of the index and finish-reason logic)
+                      candidate))
+                  choice-list))
+               (response (object :candidates candidates))
+               (usage-metadata (openai-usage->gemini-usage (openai-field data "usage" :usage)))
+               (model-name (or (openai-field data "model" :model)
+                               (openai-field data "model_name" :model_name :model-name :model--name))))
+          (when model-name
+            (setf (get-model-version response) model-name))
+          (values response usage-metadata)))
     (error (c)
       (format *trace-output* "~&;; WARNING: Failed to decode OpenAI response: ~a~%" c)
       (values (object :candidates (list (object :content (content :role "model"

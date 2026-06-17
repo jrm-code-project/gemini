@@ -355,6 +355,76 @@
     (is (null (gemini::get-thoughts-token-count gemini-usage)))
     (is (= 50 (gemini::get-candidates-token-count gemini-usage)))))
 
+(test gemini-backend-mock-test
+  "Test the gemini-backend CLOS implementation with mocked %%invoke-gemini responses."
+  (let* ((backend (make-instance 'gemini::gemini-backend))
+         (mock-payload (gemini::object :contents (list (gemini::content :role "user" :parts (list (part "hello"))))))
+         (mock-response
+           (gemini::object :candidates
+                           (list (gemini::object :content (gemini::content :role "model" :parts (list (part "gemini reply")))))
+                           :usage-metadata
+                           (gemini::object :prompt-token-count 10 :candidates-token-count 20)))
+         (called-model-id nil)
+         (called-payload nil)
+         ;; Mock %%invoke-gemini
+         (mock-invoke-gemini (lambda (model-id payload &key read-timeout connect-timeout)
+                               (declare (ignore read-timeout connect-timeout))
+                               (setf called-model-id model-id
+                                     called-payload payload)
+                               mock-response)))
+    (let ((orig-invoke-gemini #'gemini::%%invoke-gemini))
+      (unwind-protect
+           (progn
+             (setf (fdefinition 'gemini::%%invoke-gemini) mock-invoke-gemini)
+             
+             ;; Call invoke-backend
+             (multiple-value-bind (response usage)
+                 (gemini::invoke-backend backend "mock-gemini-model" mock-payload)
+               (is (equal "mock-gemini-model" called-model-id))
+               (is (eq mock-payload called-payload))
+               (is (equal "gemini reply" (content->text (get-content (elt (get-candidates response) 0)))))
+               (is (= 10 (gemini::get-prompt-token-count usage)))
+               (is (= 20 (gemini::get-candidates-token-count usage)))))
+        ;; Restore
+        (setf (fdefinition 'gemini::%%invoke-gemini) orig-invoke-gemini)))))
+
+(test openai-backend-mock-test
+  "Test the openai-backend CLOS implementation with mocked %%invoke-openai responses."
+  (let* ((backend (make-instance 'gemini::openai-backend :url "http://mock-url/v1/chat/completions"))
+         (mock-payload (gemini::object :contents (list (gemini::content :role "user" :parts (list (part "hello"))))))
+         ;; Mock OpenAI JSON response containing choices and usage details
+         (mock-response-json
+           "{\"choices\": [{\"message\": {\"role\": \"assistant\", \"content\": \"openai reply\"}}],
+             \"usage\": {\"prompt_tokens\": 5, \"completion_tokens\": 50, \"completion_tokens_details\": {\"reasoning_tokens\": 30}}}")
+         (called-model-id nil)
+         (called-payload nil)
+         (called-url nil)
+         ;; Mock %%invoke-openai
+         (mock-invoke-openai (lambda (model-id payload &key url read-timeout connect-timeout)
+                               (declare (ignore read-timeout connect-timeout))
+                               (setf called-model-id model-id
+                                     called-payload payload
+                                     called-url url)
+                               mock-response-json)))
+    (let ((orig-invoke-openai #'gemini::%%invoke-openai))
+      (unwind-protect
+           (progn
+             (setf (fdefinition 'gemini::%%invoke-openai) mock-invoke-openai)
+             
+             ;; Call invoke-backend
+             (multiple-value-bind (response usage)
+                 (gemini::invoke-backend backend "mock-openai-model" mock-payload)
+               (is (equal "mock-openai-model" called-model-id))
+               (is (equal "http://mock-url/v1/chat/completions" called-url))
+               (is (not (null called-payload)))
+               (is (equal "openai reply" (content->text (get-content (elt (get-candidates response) 0)))))
+               (is (= 5 (gemini::get-prompt-token-count usage)))
+               (is (= 30 (gemini::get-thoughts-token-count usage)))
+               ;; completion_tokens (50) - reasoning_tokens (30) = 20
+               (is (= 20 (gemini::get-candidates-token-count usage)))))
+        ;; Restore
+        (setf (fdefinition 'gemini::%%invoke-openai) orig-invoke-openai)))))
+
 (test token-accounting-thread-safety
   "Test that global token logging is robust and thread-safe under high concurrent contention."
   (let* ((num-threads 10)
