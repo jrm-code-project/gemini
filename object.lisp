@@ -541,6 +541,11 @@
 
   (:documentation "Class representing persona configuration."))
 
+(defmethod shared-initialize :after ((instance persona-config) slot-names &key &allow-other-keys)
+  "Enforces model objects on initialization of persona-config."
+  (when (slot-boundp instance 'model)
+    (setf (slot-value instance 'model) (ensure-model (slot-value instance 'model)))))
+
 (defmethod get-generation-config ((object persona-config))
   (if (slot-boundp object 'generation-config)
       (slot-value object 'generation-config)
@@ -694,7 +699,15 @@
    (instruction :initarg :instruction :reader agent-instruction)
    (model :initarg :model :reader agent-model :initform nil)))
 
+(defmethod shared-initialize :after ((instance agent) slot-names &key &allow-other-keys)
+  "Enforces model objects on initialization of agent."
+  (when (and (slot-boundp instance 'model) (slot-value instance 'model))
+    (setf (slot-value instance 'model) (ensure-model (slot-value instance 'model)))))
+
 (defun resolve-agent-model (agent override-model)
-  (or override-model (agent-model agent) *gemini-flash*))
+  (let ((model-or-gen (or override-model (agent-model agent) *gemini-flash*)))
+    (if (and model-or-gen (not (typep model-or-gen 'content-generator)))
+        (ensure-model model-or-gen)
+        model-or-gen)))
 
 (defgeneric invoke (agent prompts &key model-override timeout-ms &allow-other-keys))

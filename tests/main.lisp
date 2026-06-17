@@ -479,6 +479,49 @@
         ;; Restore
         (setf (fdefinition 'gemini::%%invoke-openai) orig-invoke-openai)))))
 
+(test model-objects-and-registry
+  "Verify that model objects can be created, registered, found, and are automatically enforced in persona-config and agent slots."
+  (let* ((mock-model-id "models/mock-model-123")
+         (mock-model-name "mock-model-123")
+         (model-obj (gemini::ensure-model mock-model-id)))
+    ;; 1. Check basic model object properties
+    (is (typep model-obj 'gemini::model))
+    (is (equal mock-model-id (gemini::get-model-id model-obj)))
+    (is (equal mock-model-id (gemini::get-model-name model-obj)))
+    
+    ;; 2. Register with a custom name
+    (let ((custom-model (make-instance 'gemini::model :id "id-xyz" :name "custom-name")))
+      (gemini::register-model custom-model)
+      (is (eq custom-model (gemini::find-model "id-xyz")))
+      (is (eq custom-model (gemini::find-model "custom-name")))
+      (is (eq custom-model (gemini::ensure-model "id-xyz")))
+      (is (eq custom-model (gemini::ensure-model "custom-name")))
+      (is (eq custom-model (gemini::ensure-model custom-model))))
+
+    ;; 3. Check persona-config auto-conversion
+    (let ((config (make-instance 'gemini::persona-config
+                                 :name "test-persona"
+                                 :model "models/gemini-flash-latest")))
+      (is (typep (gemini::get-model config) 'gemini::model))
+      (is (equal "models/gemini-flash-latest" (gemini::get-model-id (gemini::get-model config)))))
+
+    ;; 4. Check agent auto-conversion
+    (let ((agent (make-instance 'gemini::agent
+                                :name "test-agent"
+                                :instruction "test"
+                                :model "models/gemini-pro-latest")))
+      (is (typep (gemini::agent-model agent) 'gemini::model))
+      (is (equal "models/gemini-pro-latest" (gemini::get-model-id (gemini::agent-model agent)))))
+
+    ;; 5. Check resolve-agent-model behavior
+    (let* ((agent (make-instance 'gemini::agent
+                                 :name "test-agent"
+                                 :instruction "test"
+                                 :model "models/gemini-pro-latest"))
+           (resolved (gemini::resolve-agent-model agent nil)))
+      (is (typep resolved 'gemini::model))
+      (is (equal "models/gemini-pro-latest" (gemini::get-model-id resolved))))))
+
 (test token-accounting-thread-safety
   "Test that global token logging is robust and thread-safe under high concurrent contention."
   (let* ((num-threads 10)

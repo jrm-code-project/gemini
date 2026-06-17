@@ -105,7 +105,9 @@
 
 (defmethod invoke-backend ((backend gemini-backend) model-id payload &key (read-timeout 300) (connect-timeout 60) &allow-other-keys)
   "Invokes the Google Gemini API backend."
-  (let ((response (%%invoke-gemini model-id payload :read-timeout read-timeout :connect-timeout connect-timeout)))
+  (let* ((model-obj (ensure-model model-id))
+         (actual-model-id (get-model-id model-obj))
+         (response (%%invoke-gemini actual-model-id payload :read-timeout read-timeout :connect-timeout connect-timeout)))
     (let ((err (get-error response))
           (usage-metadata (get-usage-metadata response)))
       (when err
@@ -119,23 +121,25 @@
 
 (defmethod invoke-backend ((backend openai-backend) model-id payload &key (read-timeout 300) (connect-timeout 60) &allow-other-keys)
   "Invokes the OpenAI/LM-Studio compatible backend."
-  (multiple-value-bind (response usage-metadata)
-      (openai-response->gemini-response
-       (%%invoke-openai model-id
-                        (build-openai-payload model-id payload)
-                        :url (or (get-backend-url backend)
-                                 "http://localhost:1234/v1/chat/completions")
-                        :read-timeout read-timeout
-                        :connect-timeout connect-timeout))
-    (when usage-metadata
-      (process-usage-metadata usage-metadata))
-    (values response usage-metadata)))
+  (let* ((model-obj (ensure-model model-id))
+         (actual-model-id (get-model-id model-obj)))
+    (multiple-value-bind (response usage-metadata)
+        (openai-response->gemini-response
+         (%%invoke-openai actual-model-id
+                          (build-openai-payload actual-model-id payload)
+                          :url (or (get-backend-url backend)
+                                   "http://localhost:1234/v1/chat/completions")
+                          :read-timeout read-timeout
+                          :connect-timeout connect-timeout))
+      (when usage-metadata
+        (process-usage-metadata usage-metadata))
+      (values response usage-metadata))))
 
 (defun %invoke-gemini (content-generator model-id payload &key (read-timeout 300) (connect-timeout 60))
   "Internal helper that invokes the backend.
    Returns Gemini-style response and normalized usage metadata."
   (invoke-backend (get-backend content-generator)
-                  model-id
+                  (ensure-model model-id)
                   payload
                   :read-timeout read-timeout
                   :connect-timeout connect-timeout))
@@ -759,7 +763,7 @@
                                (lambda (c)
                                  (declare (ignore c))
                                  (let ((restart (find-restart 'use-weaker-model)))
-                                   (when (and restart (not (equal current-model +default-model+)))
+                                   (when (and restart (not (eq (ensure-model current-model) (ensure-model +default-model+))))
                                      (invoke-restart restart))))))
                 (%invoke-gemini content-generator current-model payload :read-timeout read-timeout :connect-timeout connect-timeout))
             (let* ((candidates (get-candidates response*))

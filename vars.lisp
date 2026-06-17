@@ -308,17 +308,57 @@
 (defun standard-system-instruction (personality)
   (read-system-instruction "standard-system-instruction" personality))
 
-(defparameter +default-model+ "models/gemini-flash-latest"
-  "The default model to use for the Gemini API.
+(defclass model ()
+  ((id :initarg :id :accessor get-model-id :initform "" :type string)
+   (name :initarg :name :accessor get-model-name :initform "" :type string))
+  (:documentation "Represents an LLM model, wrapping its ID and Name."))
+
+(defmethod print-object ((object model) stream)
+  (if *print-escape*
+      (print-unreadable-object (object stream :type t :identity nil)
+        (format stream "~a" (get-model-id object)))
+      (format stream "~a" (get-model-id object))))
+
+(defvar *model-registry* (make-hash-table :test 'equalp)
+  "Registry of all known model objects mapped by their name/id.")
+
+(defun register-model (model)
+  "Registers a model object in the global registry."
+  (setf (gethash (get-model-id model) *model-registry*) model)
+  (setf (gethash (get-model-name model) *model-registry*) model)
+  model)
+
+(defun find-model (name-or-id)
+  "Looks up a model object by name or ID in the global registry."
+  (typecase name-or-id
+    (model name-or-id)
+    (string (gethash name-or-id *model-registry*))
+    (t nil)))
+
+(defun ensure-model (name-or-id)
+  "Returns a model object for NAME-OR-ID.
+   If NAME-OR-ID is already a model object, returns it directly.
+   If it is a string, looks up the registered model.
+   If not found in registry, creates a new model object on the fly, registers it, and returns it.
+   Otherwise returns NAME-OR-ID as-is."
+  (cond ((typep name-or-id 'model) name-or-id)
+        ((stringp name-or-id)
+         (or (find-model name-or-id)
+             (register-model (make-instance 'model :id name-or-id :name name-or-id))))
+        (t name-or-id)))
+
+(defparameter +default-model+
+  (register-model (make-instance 'model :id "models/gemini-flash-latest" :name "gemini-flash-latest"))
+  "The default model object to use for the Gemini API.
    This can be overridden by the MODEL keyword argument in `invoke-gemini`.")
 
 (defparameter +turbo-mapping+
-  '((#\$ . "models/gemini-3.1-pro-preview")
-    (#\+ . "models/gemini-3.5-flash")
-    (#\% . "models/gemini-3.1-pro-preview-customtools")
-    (#\* . "models/gemini-pro-latest")
-    (#\- . "models/gemini-flash-lite-latest"))
-  "A mapping of characters to default models.")
+  (list (cons #\$ (register-model (make-instance 'model :id "models/gemini-3.1-pro-preview" :name "gemini-3.1-pro-preview")))
+        (cons #\+ (register-model (make-instance 'model :id "models/gemini-3.5-flash" :name "gemini-3.5-flash")))
+        (cons #\% (register-model (make-instance 'model :id "models/gemini-3.1-pro-preview-customtools" :name "gemini-3.1-pro-preview-customtools")))
+        (cons #\* (register-model (make-instance 'model :id "models/gemini-pro-latest" :name "gemini-pro-latest")))
+        (cons #\- (register-model (make-instance 'model :id "models/gemini-flash-lite-latest" :name "gemini-flash-lite-latest"))))
+  "A mapping of characters to default model objects.")
 
 (defparameter *enable-personality* t
   "If non-NIL, the model will answer in the style of a randomly chosen personality.")
