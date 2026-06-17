@@ -438,27 +438,22 @@ Does not add values to ALISTS."
     (finish-output stream)))
 
 (defun read-full-forms (string)
-  "Reads all Lisp forms from STRING using the hardened Predator Reader and returns them."
-  (uiop:with-temporary-file (:pathname temp-file :element-type '(unsigned-byte 8) :direction :output)
-    (let ((bytes (map '(vector (unsigned-byte 8)) #'char-code string)))
-      (with-open-file (out temp-file :direction :output :element-type '(unsigned-byte 8) :if-exists :supersede)
-        (write-sequence bytes out)))
-    (with-open-file (in temp-file :direction :input :element-type '(unsigned-byte 8))
-      (let ((forms '()))
-        (loop
-          (multiple-value-bind (form status) (predator-read in)
-            (cond
-              ((eq status :eof)
-               (return))
-              ((eq status :threat-eliminated)
-               (error "Expression evaluation blocked: threat detected or invalid syntax."))
-              (t
-               (push form forms)))))
-        (if (null forms)
-            nil
-            (if (null (cdr forms))
-            (car forms)
-            (cons 'progn (reverse forms))))))))
+  "Reads all Lisp forms from STRING using the standard Common Lisp reader and returns them."
+  (with-input-from-string (in string)
+    (let ((forms '()))
+      (handler-case
+          (loop
+            (let ((form (read in nil :eof)))
+              (if (eq form :eof)
+                  (return)
+                  (push form forms))))
+        (error (c)
+          (error "Reader error: ~a" c)))
+      (if (null forms)
+          nil
+          (if (null (cdr forms))
+              (car forms)
+              (cons 'progn (reverse forms)))))))
 
             (defun parse-float-safely (string)
             "Parses a float from STRING safely without using the Lisp reader."
