@@ -2217,3 +2217,77 @@
                     (backend (make-instance 'gemini:interactions-backend)))
                (gemini:invoke-backend backend "gemini-3.5-flash" legacy-payload)))
         (setf (fdefinition 'google:google-post) orig-google-post)))))
+
+;;;; =========================================================================
+;;;; Stateful SSE Socket & Monitor Thread Tests
+;;;; =========================================================================
+
+(test test-sse-socket-lifecycle-normal
+  "Test that the stateful-sse-socket transitions states cleanly and cleans up resources normally."
+  (let* ((mock-stream (make-string-input-stream "mock data"))
+         (socket (make-instance 'gemini:stateful-sse-socket :read-timeout 10)))
+    (setf (gemini::sse-socket-stream socket) mock-stream)
+    (is (eq :unconnected (gemini:sse-socket-state socket)))
+    
+    (gemini:transition-sse-state socket :connecting)
+    (is (eq :connecting (gemini:sse-socket-state socket)))
+    
+    (gemini:transition-sse-state socket :streaming)
+    (is (eq :streaming (gemini:sse-socket-state socket)))
+    
+    (gemini:transition-sse-state socket :closed)
+    (is (eq :closed (gemini:sse-socket-state socket)))
+    
+    ;; Stream should be closed
+    (is (not (open-stream-p mock-stream)))))
+
+(test test-sse-socket-abort-and-drain
+  "Test that signaling abort transitions to :draining instantly and wakes the monitor thread."
+  (let* ((mock-stream (make-string-input-stream "mock data"))
+         (socket (make-instance 'gemini:stateful-sse-socket :read-timeout 10))
+         (cleanup-called nil))
+    (setf (gemini::sse-socket-stream socket) mock-stream)
+    (setf (gemini::sse-socket-cleanup-hook socket) (lambda () (setf cleanup-called t)))
+    (gemini:transition-sse-state socket :streaming)
+    
+    ;; Start the monitor thread
+    (gemini:start-sse-monitor-thread socket)
+    (is (and (gemini::sse-socket-monitor-thread socket)
+             (sb-thread:thread-alive-p (gemini::sse-socket-monitor-thread socket))))
+    
+    ;; Signal abort
+    (gemini:signal-sse-abort socket)
+    
+    ;; Wait a tiny moment for the monitor thread to notice and exit
+    (loop repeat 100
+          while (sb-thread:thread-alive-p (gemini::sse-socket-monitor-thread socket))
+          do (sleep 0.01))
+    
+    ;; Monitor thread should have exited
+    (is (not (sb-thread:thread-alive-p (gemini::sse-socket-monitor-thread socket))))
+    ;; State should have transitioned to closed (finalizer transitions draining to closed)
+    (is (eq :closed (gemini:sse-socket-state socket)))
+    ;; Resources should be cleaned up
+    (is (not (open-stream-p mock-stream)))
+    (is (eq t cleanup-called))))
+
+(test test-sse-socket-timeout-handling
+  "Test that the monitor thread automatically aborts a frozen connection after read-timeout."
+  (let* ((mock-stream (make-string-input-stream "mock data"))
+         ;; Very short timeout of 1 second for fast testing
+         (socket (make-instance 'gemini:stateful-sse-socket :read-timeout 1)))
+    (setf (gemini::sse-socket-stream socket) mock-stream)
+    (gemini:transition-sse-state socket :streaming)
+    ;; Set last activity to 2 seconds ago to simulate timeout instantly
+    (setf (gemini::sse-socket-last-activity-time socket) (- (get-universal-time) 2))
+    
+    (gemini:start-sse-monitor-thread socket)
+    
+    ;; Monitor thread should see the timeout and transition to aborted
+    (loop repeat 100
+          while (sb-thread:thread-alive-p (gemini::sse-socket-monitor-thread socket))
+          do (sleep 0.01))
+    
+    (is (eq :aborted (gemini:sse-socket-state socket)))
+    (is (not (open-stream-p mock-stream)))))
+

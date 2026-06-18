@@ -23,17 +23,16 @@
   (values))
 
 (defmacro with-llm-instrumentation (&body body)
-  "Executes body, updating global counters based on whether it returns a true value, nil, or signals an error."
+  "Executes body, updating global counters based on whether it returns a true value, nil, or signals an error, without unwinding the stack prematurely."
   (let ((result-sym (gensym "RESULT")))
-    `(handler-case
-         (let ((,result-sym (progn ,@body)))
-           (if ,result-sym
-               (incf *llm-returns-value-count*)
-               (incf *llm-returns-nothing-count*))
-           ,result-sym)
-       (error (e)
-         (incf *llm-abort-count*)
-         (error e)))))
+    `(handler-bind ((error (lambda (e)
+                             (declare (ignore e))
+                             (incf *llm-abort-count*)))) ; Just increment and decline to handle
+       (let ((,result-sym (progn ,@body)))
+         (if ,result-sym
+             (incf *llm-returns-value-count*)
+             (incf *llm-returns-nothing-count*))
+         ,result-sym))))
 
 (defun call-with-model-override (generator model thunk)
   "Executes THUNK, temporarily overriding the model of the given GENERATOR if MODEL is non-NIL."

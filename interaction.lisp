@@ -305,6 +305,9 @@
       (setf (get-usage-metadata normalized) usage-metadata))
     (values normalized usage-metadata)))
 
+(defvar *current-sse-socket* nil
+  "Thread-local dynamically bound active stateful SSE socket.")
+
 (defparameter +interactions-malformed-tool-call-max-retries+ 5
   "Maximum number of immediate retries after a malformed_tool_call response from Interactions.")
 
@@ -327,7 +330,9 @@
                                        :read-timeout (or read-timeout 60)
                                        :connect-timeout (or connect-timeout 300))
                  (error (e)
-                   (if (and (interactions-malformed-tool-call-error-p e)
+                   (if (and (or (null *current-sse-socket*)
+                                (not (sse-socket-abort-requested-p *current-sse-socket*)))
+                            (interactions-malformed-tool-call-error-p e)
                             (< attempt +interactions-malformed-tool-call-max-retries+))
                        (progn
                          (incf attempt)
@@ -352,7 +357,9 @@
                     :read-timeout read-timeout
                     :connect-timeout connect-timeout)
                  (error (e)
-                   (if (and (interactions-malformed-tool-call-error-p e)
+                   (if (and (or (null *current-sse-socket*)
+                                (not (sse-socket-abort-requested-p *current-sse-socket*)))
+                            (interactions-malformed-tool-call-error-p e)
                             (< attempt +interactions-malformed-tool-call-max-retries+))
                        (progn
                          (incf attempt)
@@ -387,28 +394,70 @@
           (funcall receiver (object :event-type "interaction.completed"
                                     :interaction response)))
         
-        ;; Standard Production SSE Streaming HTTP Call
-        (multiple-value-bind (body-stream status headers)
-            (funcall google:*dex-post* uri
-                     :headers `(("Accept" . "application/json")
-                                ("Content-Type" . "application/json")
-                                ("Api-Revision" . "2026-05-20")
-                                ("x-goog-api-key" . ,api-key))
-                     :verbose verbose
-                     :content (cl-json:encode-json-to-string payload)
-                     :want-stream t
-                     :read-timeout (or read-timeout google:+default-read-timeout+)
-                     :connect-timeout (or connect-timeout google:+default-connect-timeout+))
-          (declare (ignore status))
-          (let ((content-type (google::get-header-value headers "content-type")))
-            (if (and content-type (str:starts-with? "text/event-stream" content-type))
-                (google::process-sse-stream body-stream receiver)
-                ;; Fallback to contiguous JSON stream
-                (do ((json :begin (handler-case (cl-json:decode-json body-stream)
-                                    (end-of-file () nil)))
-                     (result nil (unless (eq json :begin)
-                                   (funcall receiver json))))
-                    ((null json) result))))))))
+        ;; Standard Production SSE Streaming HTTP Call using stateful-sse-socket state machine
+        (let ((socket (make-instance 'stateful-sse-socket
+                                     :read-timeout (or read-timeout 300)
+                                     :receiver receiver))
+              (net-thread-error nil))
+          (setf *current-sse-socket* socket)
+          (transition-sse-state socket :connecting)
+          
+          ;; Spawn the network thread to perform the blocking call
+          (setf (sse-socket-network-thread socket)
+                (sb-thread:make-thread
+                 (lambda ()
+                   (handler-case
+                       (multiple-value-bind (body-stream status headers)
+                           (funcall google:*dex-post* uri
+                                    :headers `(("Accept" . "application/json")
+                                               ("Content-Type" . "application/json")
+                                               ("Api-Revision" . "2026-05-20")
+                                               ("x-goog-api-key" . ,api-key))
+                                    :verbose verbose
+                                    :content (cl-json:encode-json-to-string payload)
+                                    :want-stream t
+                                    :read-timeout (or read-timeout google:+default-read-timeout+)
+                                    :connect-timeout (or connect-timeout google:+default-connect-timeout+))
+                         (declare (ignore status))
+                         (setf (sse-socket-stream socket) body-stream)
+                         (transition-sse-state socket :streaming)
+                         (setf (sse-socket-last-activity-time socket) (get-universal-time))
+                         
+                         (let ((content-type (google::get-header-value headers "content-type")))
+                           (if (and content-type (str:starts-with? "text/event-stream" content-type))
+                               ;; Streaming SSE
+                               (google::process-sse-stream
+                                body-stream
+                                (lambda (event)
+                                  ;; Wrap receiver to update activity time
+                                  (setf (sse-socket-last-activity-time socket) (get-universal-time))
+                                  (unless (member (sse-socket-state socket) '(:draining :closed :aborted))
+                                    (funcall receiver event))))
+                               ;; Fallback to contiguous JSON stream
+                               (do ((json :begin (handler-case (cl-json:decode-json body-stream)
+                                                   (end-of-file () nil)))
+                                    (result nil (unless (eq json :begin)
+                                                  (setf (sse-socket-last-activity-time socket) (get-universal-time))
+                                                  (funcall receiver json))))
+                                   ((null json) result)))))
+                     (error (e)
+                       ;; Capture error unless abort was requested
+                       (unless (sse-socket-abort-requested-p socket)
+                         (setf net-thread-error e)
+                         (error e)))))
+                 :name "SSE Network Thread"))
+          
+          ;; Start the monitor thread
+          (start-sse-monitor-thread socket)
+          
+          ;; Wait for network-thread to complete
+          (unwind-protect
+               (progn
+                 (sb-thread:join-thread (sse-socket-network-thread socket))
+                 (when net-thread-error
+                   (error net-thread-error)))
+            ;; Always transition to :closed when leaving block
+            (transition-sse-state socket :closed))))))
 
 (defun parse-interaction-sse-event-type (event-type-str)
   "Maps string-based event types to semantic keywords."
@@ -668,10 +717,18 @@
    from the current session, performs a streaming POST call under the hood, 
    updates the session ID, and returns parsed step-based objects (accumulated 
    internally if no receiver callback is provided)."
-  (let* ((session (ensure-runtime-session))
-         (prev-id (runtime-session-interaction-id session))
-         ;; Check if payload is a legacy contents-based stateless payload
-         (contents (adapter-field payload "contents" :contents)))
+  (let ((*current-sse-socket* nil))
+    (handler-bind ((sb-sys:interactive-interrupt
+                    (lambda (c)
+                      (declare (ignore c))
+                      (when *current-sse-socket*
+                        (signal-sse-abort *current-sse-socket*)
+                        (transition-sse-state *current-sse-socket* :draining))
+                      (return-from invoke-backend (values nil nil)))))
+      (let* ((session (ensure-runtime-session))
+             (prev-id (runtime-session-interaction-id session))
+             ;; Check if payload is a legacy contents-based stateless payload
+             (contents (adapter-field payload "contents" :contents)))
     (when contents
       (let* ((contents-list (adapter-as-list contents))
              (last-turn (car (last contents-list)))
@@ -749,6 +806,136 @@
             (unless receiver
               (if final-interaction
                   (interaction-steps->gemini-response final-steps final-interaction)
-                  (error "Interactions stream closed without receiving interaction.completed event.")))))))
+                  (error "Interactions stream closed without receiving interaction.completed event.")))))))))
+
+
+;;;; =========================================================================
+;;;; Stateful SSE Socket & Monitor Thread Implementation
+;;;; =========================================================================
+
+(defclass stateful-sse-socket ()
+  ((state :initform :unconnected
+          :accessor sse-socket-state
+          :type (member :unconnected :connecting :streaming :draining :closed :aborted))
+   (state-lock :initform (sb-thread:make-mutex :name "sse-state-lock")
+               :reader sse-socket-state-lock)
+   (waitqueue :initform (sb-thread:make-waitqueue)
+              :reader sse-socket-waitqueue)
+   (stream :initform nil
+           :accessor sse-socket-stream
+           :documentation "The raw HTTP/SSE body-stream returned by Dexador.")
+   (network-thread :initform nil
+                   :accessor sse-socket-network-thread
+                   :documentation "The thread performing the active block reads.")
+   (monitor-thread :initform nil
+                   :accessor sse-socket-monitor-thread
+                   :documentation "The thread watching for hangs, timeouts, and state updates.")
+   (last-activity-time :initform (get-universal-time)
+                       :accessor sse-socket-last-activity-time
+                       :documentation "Timestamp of the last successfully parsed byte or SSE chunk.")
+   (read-timeout :initarg :read-timeout
+                 :initform 300
+                 :reader sse-socket-read-timeout)
+   (receiver :initarg :receiver
+             :reader sse-socket-receiver
+             :documentation "Callback function for parsed SSE events.")
+   (abort-requested-p :initform nil
+                      :accessor sse-socket-abort-requested-p
+                      :documentation "Flag indicating that the client thread requested an abort.")
+   (cleanup-hook :initform nil
+                 :accessor sse-socket-cleanup-hook
+                 :documentation "Closure to run on final termination to release resources.")))
+
+(defun close-sse-socket-resources-safely (socket)
+  "Executes physical resource teardown. Idempotent and thread-safe."
+  ;; 1. Close Stream
+  (let ((stream (sse-socket-stream socket)))
+    (when (and stream (open-stream-p stream))
+      (ignore-errors (close stream))
+      (setf (sse-socket-stream socket) nil)))
+
+  ;; 2. Run teardown hook
+  (let ((hook (sse-socket-cleanup-hook socket)))
+    (when hook
+      (setf (sse-socket-cleanup-hook socket) nil)
+      (ignore-errors (funcall hook))))
+
+  ;; 3. Handle outstanding threads
+  (let ((net-thread (sse-socket-network-thread socket)))
+    (when (and net-thread 
+               (sb-thread:thread-alive-p net-thread)
+               (not (eq sb-thread:*current-thread* net-thread)))
+      ;; Allow a very brief window (50ms) for the thread to exit naturally due to closed stream
+      (loop repeat 5
+            while (sb-thread:thread-alive-p net-thread)
+            do (sleep 0.01))
+      ;; Forceful fallback if still alive
+      (when (sb-thread:thread-alive-p net-thread)
+        (ignore-errors (sb-thread:terminate-thread net-thread)))
+      (setf (sse-socket-network-thread socket) nil))))
+
+(defun transition-sse-state (socket new-state)
+  "Thread-safely transitions the socket state, checking valid lifecycles."
+  (let ((trigger-cleanup nil))
+    (sb-thread:with-mutex ((sse-socket-state-lock socket))
+      (let ((old-state (sse-socket-state socket)))
+        (unless (eq old-state new-state)
+          (log-debug "SSE Socket State Transition: ~A -> ~A" old-state new-state)
+          (setf (sse-socket-state socket) new-state)
+          (when (member new-state '(:draining :closed :aborted))
+            (setf trigger-cleanup t)))))
+    ;; Perform teardown OUTSIDE the mutex lock to prevent blocking deadlocks
+    (when trigger-cleanup
+      (close-sse-socket-resources-safely socket))))
+
+(defun start-sse-monitor-thread (socket)
+  "Launches the guardian thread to oversee connection safety."
+  (setf (sse-socket-monitor-thread socket)
+        (sb-thread:make-thread
+         (lambda ()
+           (unwind-protect
+                (loop
+                  (let ((state nil)
+                        (now (get-universal-time)))
+                    ;; Safely read current state
+                    (sb-thread:with-mutex ((sse-socket-state-lock socket))
+                      (setf state (sse-socket-state socket)))
+                    
+                    ;; Case 1: Check for timeouts (socket is frozen/wedged)
+                    (when (and (eq state :streaming)
+                               (> (- now (sse-socket-last-activity-time socket))
+                                  (sse-socket-read-timeout socket)))
+                      (log-error "SSE Socket read-timeout exceeded. Socket is frozen.")
+                      (transition-sse-state socket :aborted)
+                      (return))
+
+                    ;; Case 2: Teardown if client thread aborted
+                    (when (sse-socket-abort-requested-p socket)
+                      (transition-sse-state socket :draining)
+                      (return))
+
+                    ;; Case 3: Complete monitor loop if connection closed cleanly
+                    (when (member state '(:closed :aborted))
+                      (return))
+
+                    ;; Wait on waitqueue for up to 0.5s, or wake up instantly on notification
+                    (sb-thread:with-mutex ((sse-socket-state-lock socket))
+                      (sb-thread:condition-wait (sse-socket-waitqueue socket)
+                                                (sse-socket-state-lock socket)
+                                                :timeout 0.5))))
+             ;; Final cleanup safety net
+             (let ((current-state nil))
+               (sb-thread:with-mutex ((sse-socket-state-lock socket))
+                 (setf current-state (sse-socket-state socket)))
+               (unless (member current-state '(:closed :aborted))
+                 (transition-sse-state socket :closed)))))
+         :name "SSE Socket Monitor")))
+
+(defun signal-sse-abort (socket)
+  "Instantly signals an abort request to the monitor thread."
+  (sb-thread:with-mutex ((sse-socket-state-lock socket))
+    (setf (sse-socket-abort-requested-p socket) t))
+  (sb-thread:condition-notify (sse-socket-waitqueue socket)))
+
 
                       
