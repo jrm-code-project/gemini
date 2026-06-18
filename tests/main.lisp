@@ -2291,3 +2291,10 @@
     (is (eq :aborted (gemini:sse-socket-state socket)))
     (is (not (open-stream-p mock-stream)))))
 
+(test test-sse-socket-done-marker-handling
+  "Test that our cl-json:decode-json-from-string wrapper intercepts [DONE] and returns nil cleanly instead of throwing a syntax error."
+  (is (null (cl-json:decode-json-from-string "[DONE]")))
+  (is (null (cl-json:decode-json-from-string "  [DONE]  ")))
+  ;; Standard JSON should still decode perfectly
+  (is (equal "bar" (cdr (assoc :foo (cl-json:decode-json-from-string "{\"foo\": \"bar\"}"))))))
+

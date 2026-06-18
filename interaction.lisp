@@ -2,6 +2,22 @@
 
 (in-package "GEMINI")
 
+;;;; =========================================================================
+;;;; Global JSON SSE [DONE] Terminal Shield
+;;;; =========================================================================
+
+(eval-when (:load-toplevel :execute)
+  (let ((orig-decode (fdefinition 'cl-json:decode-json-from-string)))
+    (unless (get 'cl-json:decode-json-from-string 'custom-sse-wrapped)
+      (setf (fdefinition 'cl-json:decode-json-from-string)
+            (lambda (string &rest args)
+              (if (and (stringp string)
+                       (or (string-equal string "[DONE]")
+                           (string-equal (str:trim string) "[DONE]")))
+                  nil
+                  (apply orig-decode string args))))
+      (setf (get 'cl-json:decode-json-from-string 'custom-sse-wrapped) t))))
+
 (deftype model-option ()
   '(member
     :gemini-2.5-computer-use-preview-10-2025
