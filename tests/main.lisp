@@ -2265,8 +2265,8 @@
     
     ;; Monitor thread should have exited
     (is (not (sb-thread:thread-alive-p (gemini::sse-socket-monitor-thread socket))))
-    ;; State should have transitioned to closed (finalizer transitions draining to closed)
-    (is (eq :closed (gemini:sse-socket-state socket)))
+    ;; State should have transitioned to :draining (which is preserved by guards)
+    (is (eq :draining (gemini:sse-socket-state socket)))
     ;; Resources should be cleaned up
     (is (not (open-stream-p mock-stream)))
     (is (eq t cleanup-called))))
@@ -2297,4 +2297,44 @@
   (is (null (cl-json:decode-json-from-string "  [DONE]  ")))
   ;; Standard JSON should still decode perfectly
   (is (equal "bar" (cdr (assoc :foo (cl-json:decode-json-from-string "{\"foo\": \"bar\"}"))))))
+
+(test test-sse-socket-descriptive-error-handling
+  "Test that invoke-backend raises highly descriptive errors for aborted or timed-out sockets."
+  (let ((session (gemini:make-runtime-session))
+        (orig-dex-post google:*dex-post*)
+        (backend (make-instance 'gemini:interactions-backend))
+        (dummy-payload (make-hash-table :test 'equal)))
+    (setf (gethash "model" dummy-payload) "gemini-3.5-flash")
+    (gemini:with-runtime-session (session)
+      (unwind-protect
+           (progn
+             ;; 1. Normal closure without completed event (should raise standard error)
+             (setf google:*dex-post*
+                   (lambda (uri &rest args)
+                     (declare (ignore uri args))
+                     ;; Return mock body-stream, status, and headers
+                     (values (make-string-input-stream "")
+                             200
+                             (alexandria:plist-hash-table '("content-type" "text/event-stream") :test 'equal))))
+             
+             (signals error
+               (gemini:invoke-backend backend "gemini-3.5-flash" dummy-payload))
+             
+             ;; 2. Simulated Aborted socket state (should raise read timeout error)
+             (setf google:*dex-post*
+                   (lambda (uri &rest args)
+                     (declare (ignore uri args))
+                     (when gemini::*current-sse-socket*
+                       (gemini:transition-sse-state gemini::*current-sse-socket* :aborted))
+                     (values (make-string-input-stream "")
+                             200
+                             (alexandria:plist-hash-table '("content-type" "text/event-stream") :test 'equal))))
+             
+             (handler-case
+                 (progn
+                   (gemini:invoke-backend backend "gemini-3.5-flash" dummy-payload)
+                   (fail "Expected error not raised."))
+               (error (e)
+                 (is (search "read timeout" (princ-to-string e))))))
+        (setf google:*dex-post* orig-dex-post)))))
 

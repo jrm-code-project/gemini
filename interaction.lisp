@@ -422,45 +422,46 @@
           (setf (sse-socket-network-thread socket)
                 (sb-thread:make-thread
                  (lambda ()
-                   (handler-case
-                       (multiple-value-bind (body-stream status headers)
-                           (funcall google:*dex-post* uri
-                                    :headers `(("Accept" . "application/json")
-                                               ("Content-Type" . "application/json")
-                                               ("Api-Revision" . "2026-05-20")
-                                               ("x-goog-api-key" . ,api-key))
-                                    :verbose verbose
-                                    :content (cl-json:encode-json-to-string payload)
-                                    :want-stream t
-                                    :read-timeout (or read-timeout google:+default-read-timeout+)
-                                    :connect-timeout (or connect-timeout google:+default-connect-timeout+))
-                         (declare (ignore status))
-                         (setf (sse-socket-stream socket) body-stream)
-                         (transition-sse-state socket :streaming)
-                         (setf (sse-socket-last-activity-time socket) (get-universal-time))
-                         
-                         (let ((content-type (google::get-header-value headers "content-type")))
-                           (if (and content-type (str:starts-with? "text/event-stream" content-type))
-                               ;; Streaming SSE
-                               (google::process-sse-stream
-                                body-stream
-                                (lambda (event)
-                                  ;; Wrap receiver to update activity time
-                                  (setf (sse-socket-last-activity-time socket) (get-universal-time))
-                                  (unless (member (sse-socket-state socket) '(:draining :closed :aborted))
-                                    (funcall receiver event))))
-                               ;; Fallback to contiguous JSON stream
-                               (do ((json :begin (handler-case (cl-json:decode-json body-stream)
-                                                   (end-of-file () nil)))
-                                    (result nil (unless (eq json :begin)
-                                                  (setf (sse-socket-last-activity-time socket) (get-universal-time))
-                                                  (funcall receiver json))))
-                                   ((null json) result)))))
-                     (error (e)
-                       ;; Capture error unless abort was requested
-                       (unless (sse-socket-abort-requested-p socket)
-                         (setf net-thread-error e)
-                         (error e)))))
+                   (let ((*current-sse-socket* socket))
+                     (handler-case
+                         (multiple-value-bind (body-stream status headers)
+                             (funcall google:*dex-post* uri
+                                      :headers `(("Accept" . "application/json")
+                                                 ("Content-Type" . "application/json")
+                                                 ("Api-Revision" . "2026-05-20")
+                                                 ("x-goog-api-key" . ,api-key))
+                                      :verbose verbose
+                                      :content (cl-json:encode-json-to-string payload)
+                                      :want-stream t
+                                      :read-timeout (or read-timeout google:+default-read-timeout+)
+                                      :connect-timeout (or connect-timeout google:+default-connect-timeout+))
+                           (declare (ignore status))
+                           (setf (sse-socket-stream socket) body-stream)
+                           (transition-sse-state socket :streaming)
+                           (setf (sse-socket-last-activity-time socket) (get-universal-time))
+                           
+                           (let ((content-type (google::get-header-value headers "content-type")))
+                             (if (and content-type (str:starts-with? "text/event-stream" content-type))
+                                 ;; Streaming SSE
+                                 (google::process-sse-stream
+                                  body-stream
+                                  (lambda (event)
+                                    ;; Wrap receiver to update activity time
+                                    (setf (sse-socket-last-activity-time socket) (get-universal-time))
+                                    (unless (member (sse-socket-state socket) '(:draining :closed :aborted))
+                                      (funcall receiver event))))
+                                 ;; Fallback to contiguous JSON stream
+                                 (do ((json :begin (handler-case (cl-json:decode-json body-stream)
+                                                     (end-of-file () nil)))
+                                      (result nil (unless (eq json :begin)
+                                                    (setf (sse-socket-last-activity-time socket) (get-universal-time))
+                                                    (funcall receiver json))))
+                                     ((null json) result)))))
+                       (error (e)
+                         ;; Capture error unless abort was requested
+                         (unless (sse-socket-abort-requested-p socket)
+                           (setf net-thread-error e)
+                           (error e))))))
                  :name "SSE Network Thread"))
           
           ;; Start the monitor thread
@@ -822,7 +823,13 @@
             (unless receiver
               (if final-interaction
                   (interaction-steps->gemini-response final-steps final-interaction)
-                  (error "Interactions stream closed without receiving interaction.completed event.")))))))))
+                  (cond ((and *current-sse-socket* (eq (sse-socket-state *current-sse-socket*) :aborted))
+                         (error "Interactions stream aborted due to read timeout (no activity for ~A seconds)."
+                                (sse-socket-read-timeout *current-sse-socket*)))
+                        ((and *current-sse-socket* (sse-socket-abort-requested-p *current-sse-socket*))
+                         (error "Interactions stream was aborted by the user."))
+                        (t
+                         (error "Interactions stream closed without receiving interaction.completed event.")))))))))))
 
 
 ;;;; =========================================================================
@@ -895,7 +902,13 @@
   (let ((trigger-cleanup nil))
     (sb-thread:with-mutex ((sse-socket-state-lock socket))
       (let ((old-state (sse-socket-state socket)))
-        (unless (eq old-state new-state)
+        (unless (or (eq old-state new-state)
+                    ;; Guard: Do not allow transitioning away from terminal/aborted/draining states back to active states
+                    (and (member old-state '(:draining :closed :aborted))
+                         (member new-state '(:unconnected :connecting :streaming)))
+                    ;; Guard: Do not allow transitioning from aborted or draining to closed
+                    (and (member old-state '(:aborted :draining))
+                         (eq new-state :closed)))
           (log-debug "SSE Socket State Transition: ~A -> ~A" old-state new-state)
           (setf (sse-socket-state socket) new-state)
           (when (member new-state '(:draining :closed :aborted))
