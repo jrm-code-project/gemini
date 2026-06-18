@@ -796,8 +796,7 @@
             ((consp payload)
              (push (cons "previous_interaction_id" prev-id) payload))))
     
-        (format t ";; DEBUG: Serialized Interactions Payload: ~A~%" (cl-json:encode-json-to-string payload))
-        (force-output)
+        (log-debug "Serialized Interactions Payload: ~A" (cl-json:encode-json-to-string payload))
         
         ;; Set the streaming flag in the request payload
         (set-safe-payload-key payload "stream" :stream t)
