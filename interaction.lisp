@@ -823,13 +823,22 @@
             (unless receiver
               (if final-interaction
                   (interaction-steps->gemini-response final-steps final-interaction)
-                  (cond ((and *current-sse-socket* (eq (sse-socket-state *current-sse-socket*) :aborted))
-                         (error "Interactions stream aborted due to read timeout (no activity for ~A seconds)."
-                                (sse-socket-read-timeout *current-sse-socket*)))
-                        ((and *current-sse-socket* (sse-socket-abort-requested-p *current-sse-socket*))
-                         (error "Interactions stream was aborted by the user."))
-                        (t
-                         (error "Interactions stream closed without receiving interaction.completed event.")))))))))))
+                  (let ((error-message
+                          (cond ((and *current-sse-socket* (eq (sse-socket-state *current-sse-socket*) :aborted))
+                                 (format nil "Interactions stream aborted due to read timeout (no activity for ~A seconds)."
+                                         (sse-socket-read-timeout *current-sse-socket*)))
+                                ((and *current-sse-socket* (sse-socket-abort-requested-p *current-sse-socket*))
+                                 "Interactions stream was aborted by the user.")
+                                (t
+                                 "Interactions stream closed without receiving interaction.completed event."))))
+                    (cerror "Fake an interaction.completed event and return steps accumulated so far."
+                            error-message)
+                    ;; If the user continues, fabricate a completed response using final-steps
+                    (let ((fake-interaction (object :id (or (and *current-sse-socket*
+                                                                 (runtime-session-interaction-id session))
+                                                            "fake_interaction_id")
+                                                    :steps (coerce final-steps 'vector))))
+                      (interaction-steps->gemini-response final-steps fake-interaction)))))))))))
 
 
 ;;;; =========================================================================

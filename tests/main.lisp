@@ -2335,6 +2335,24 @@
                    (gemini:invoke-backend backend "gemini-3.5-flash" dummy-payload)
                    (fail "Expected error not raised."))
                (error (e)
-                 (is (search "read timeout" (princ-to-string e))))))
+                 (is (search "read timeout" (princ-to-string e)))))
+             
+             ;; 3. Simulated Continuable error (should return fabricated response on continue)
+             (setf google:*dex-post*
+                   (lambda (uri &rest args)
+                     (declare (ignore uri args))
+                     (values (make-string-input-stream "")
+                             200
+                             (alexandria:plist-hash-table '("content-type" "text/event-stream") :test 'equal))))
+             
+             (let ((result nil))
+               (handler-bind ((error (lambda (e)
+                                       (declare (ignore e))
+                                       (let ((restart (find-restart 'continue)))
+                                         (when restart
+                                           (invoke-restart restart))))))
+                 (setf result (gemini:invoke-backend backend "gemini-3.5-flash" dummy-payload)))
+               (is (not (null result)))
+               (is (equal "fake_interaction_id" (gemini::get-response-id result)))))
         (setf google:*dex-post* orig-dex-post)))))
 
