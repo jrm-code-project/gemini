@@ -796,11 +796,12 @@
                      (setf final-interaction (adapter-field raw-event "interaction" :interaction)))))
             
             (let ((stream-proc (make-interaction-stream-processor session #'internal-receiver)))
-              (post-interactions-streaming-with-retry
-               payload
-               stream-proc
-               read-timeout
-               connect-timeout))
+              (report-elapsed-time (format nil "Interactions API request for `~a`" model-id)
+                (post-interactions-streaming-with-retry
+                 payload
+                 stream-proc
+                 read-timeout
+                 connect-timeout)))
             
             ;; If no receiver callback was supplied, block and return the reconstituted response
             (unless receiver
