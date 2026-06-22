@@ -636,19 +636,35 @@
   (sb-mop:set-funcallable-instance-function
    instance
    (lambda (prompt &key context mood parts files file system-instruction
+                    model
                     (tools nil tools-supplied-p)
                     (tool-config nil tool-config-supplied-p)
                     (read-timeout 300) (connect-timeout 60))
      (let ((files (if file (list file) files)))
-       (apply #'generate-content
-              instance context mood prompt parts files system-instruction
-              (append
-               (when tools-supplied-p
-                 (list :tools tools))
-               (when tool-config-supplied-p
-                 (list :tool-config tool-config))
-               (list :read-timeout read-timeout
-                     :connect-timeout connect-timeout)))))))
+       (if model
+           (let ((old-model (get-model instance)))
+             (unwind-protect
+                  (progn
+                    (setf (get-model instance) model)
+                    (apply #'generate-content
+                           instance context mood prompt parts files system-instruction
+                           (append
+                            (when tools-supplied-p
+                              (list :tools tools))
+                            (when tool-config-supplied-p
+                              (list :tool-config tool-config))
+                            (list :read-timeout read-timeout
+                                  :connect-timeout connect-timeout))))
+               (setf (get-model instance) old-model)))
+           (apply #'generate-content
+                  instance context mood prompt parts files system-instruction
+                  (append
+                   (when tools-supplied-p
+                     (list :tools tools))
+                   (when tool-config-supplied-p
+                     (list :tool-config tool-config))
+                   (list :read-timeout read-timeout
+                         :connect-timeout connect-timeout))))))))
 
 (defmethod shared-initialize :after ((instance content-generator) slot-names &key config &allow-other-keys)
   "Initializes the content generator instance."

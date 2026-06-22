@@ -51,6 +51,7 @@
    (conversation :initform nil :accessor conversational-agent-conversation)
    (conversation-history :initform nil :accessor conversational-agent-conversation-history)
    (lock :initform (sb-thread:make-mutex :name "chatbot-lock") :reader conversational-agent-lock)
+   (model :initarg :model :initform nil :accessor conversational-agent-model) ; ADDED SLOT
    (cortisol :initform 0.5 :accessor conversational-agent-cortisol)
    (dopamine :initform 0.5 :accessor conversational-agent-dopamine)
    (epinephrine :initform 0.5 :accessor conversational-agent-epinephrine)
@@ -77,10 +78,8 @@
                                                 (when immediate (format nil "Immediate Goals:~%~a" immediate)))))))
     (if (string/= goals-section "")
         (concatenate 'string
-               "SYSTEM HEARTBEAT OVERRIDE: " (princ-to-string (get-universal-time)) '(#\Newline)
-               "LONG-TERM GOALS:" '(#\Newline) long-term-text '(#\Newline)
-               "SHORT-TERM GOALS:" '(#\Newline) short-term-text '(#\Newline)
-               "IMMEDIATE GOALS:" '(#\Newline) immediate-text '(#\Newline)
+                     goals-section
+                     '(#\Newline)
                "----------------------------------------" '(#\Newline)
                "DIRECTIVE: You are V. This is your Agentic Heartbeat. "
                "Review the IMMEDIATE GOALS. Select the top priority and execute it NOW using your available tools, "
@@ -101,17 +100,26 @@
              (when (> (length (conversational-agent-conversation-history self)) 1)
                (setf (conversational-agent-conversation-history self) (cdr (conversational-agent-conversation-history self))
                      (conversational-agent-conversation self) (car (conversational-agent-conversation-history self))))
-             (return-from invoke 'popped))
+             (return-from invoke :popped))
             
-            ;; ... (Handle :checkpoint!, :restore!, :set-model! here similarly) ...
+            ;; PROPERLY IMPLEMENTED ADMINISTRATIVE COMMANDS
+            ((eq prompt :checkpoint!)
+             (push (conversational-agent-conversation self) (conversational-agent-conversation-history self))
+             (return-from invoke :checkpointed))
+
+            ((eq prompt :restore!)
+             (when (conversational-agent-conversation-history self)
+               (setf (conversational-agent-conversation self) (car (conversational-agent-conversation-history self))))
+             (return-from invoke :restored))
+
+            ((eq prompt :set-model!)
+             (setf (conversational-agent-model self) model-override)
+             (return-from invoke :model-set))
             
             ((eq prompt :heartbeat!)
-             ;; We can run the heartbeat check inside the lock if it's just a pulse,
-             ;; but let's grab the context and do the call outside to be safe.
              (setf context (conversational-agent-conversation self)))
             
             (t
-             ;; Grab the context for the LLM call
              (setf context (conversational-agent-conversation self)))))
 
     ;; Phase 2: The Network Call (OUTSIDE the lock)
@@ -123,6 +131,8 @@
                         :context context
                         :parts parts
                         :files files
+                        ;; MODEL OVERRIDE ACTUALLY PASSED DOWN
+                        :model (or model-override (conversational-agent-model self))
                         :read-timeout (if timeout-ms (max 1 (floor timeout-ms 1000)) 300)))))
       
       ;; Phase 3: Short Lock to commit the result to history
@@ -288,7 +298,10 @@
                             (format t "~&[HEARTBEAT] Thread woke up at ~A~%" (get-universal-time))
                             (let ((agent (ensure-session-default-persona-chatbot (ensure-runtime-session))))
                               (when agent
-                                (chat :heartbeat!))))))
+                                (handler-case
+                                    (trivial-timeout:with-timeout ((- *heartbeat-interval-seconds* 5))
+                                      (chat :heartbeat!))
+                                  (trivial-timeout:timeout-error () nil)))))))
                :name "Gemini Heartbeat"))
         *heartbeat-thread*)))
 
