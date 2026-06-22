@@ -2,6 +2,13 @@
 
 This backlog converts the recent debt audit into execution-ready work items.
 
+## Current State
+
+- The Interactions subsystem has been split across focused session, events, payload, and transport modules.
+- Session-first APIs now exist for the main generator, chat, analysis, improvement, and Interactions entry points.
+- The default `gemini-tests` run is hermetic, with live backend coverage isolated in `interaction-live-tests`.
+- The remaining observability work is mostly limited to intentionally interactive or app-facing output paths rather than silent library cleanup.
+
 ## Working Agreement
 
 - Prioritize reliability and deterministic behavior over feature expansion.
@@ -33,6 +40,11 @@ This backlog converts the recent debt audit into execution-ready work items.
 | TD-011 | P2 | done | API Validation | Add payload validation before transport submission | TD-009 |
 | TD-012 | P2 | done | Build Modularity | Reduce coupling in ASDF graph into bounded modules | TD-007, TD-009 |
 | TD-013 | P2 | done | Observability | Second-pass cleanup: migrate remaining ad hoc trace output to logging facade and normalize severity usage | TD-008 |
+| TD-014 | P2 | done | Repo Hygiene | Refactor physical source directory structure into subdirectories | TD-012 |
+| TD-015 | P2 | done | Model Registry | Move statically-defined entry points to dynamic configuration-driven registry | TD-007 |
+| TD-016 | P1 | done | State Model | Deprecate ambient/global state variables in favor of explicit session parameters | TD-007 |
+| TD-017 | P1 | done | Transport | Implement self-healing connection watchdogs for stdio MCP sub-processes | - |
+| TD-018 | P2 | done | Tests | Implement fully-isolated mock environments for side-effect-heavy tools (git, shell, fs) | - |
 
 ---
 
@@ -284,6 +296,91 @@ This backlog converts the recent debt audit into execution-ready work items.
   - Full test suite passes after migration.
 - Estimation: 0.5-1.5 days
 
+### TD-014: Refactor physical source directory structure into subdirectories
+
+- Priority: P2
+- Status: `done`
+- Files in scope:
+  - All `.lisp` files in the flat root directory
+  - `gemini.asd`
+- Problem:
+  - Although the ASDF system defines distinct modules, all source files are crowded in the flat root directory.
+- Deliverables:
+  - Relocate `.lisp` files to corresponding subdirectories matching the system module boundaries (e.g., `infrastructure/`, `transport/`, `adapters/`, `tools/`, `orchestration/`, `apps/`).
+  - Update `gemini.asd` pathname configuration to reference the physical folders rather than virtual paths.
+- Acceptance criteria:
+  - Clean and organized repository layout matching modern Common Lisp standards.
+  - Complete ASDF load and test suites compile and execute successfully after relocation.
+- Estimation: 2-3 days
+
+### TD-015: Dynamic configuration-driven model registry
+
+- Priority: P2
+- Status: `done`
+- Files in scope:
+  - `gemini.lisp`
+  - `config.lisp`
+- Problem:
+  - Entry points like `invoke-gemini`, `gemini-flash-lite`, and `qwen` are statically defined using compile-time macrolets. Adding support for a new model requires codebase modification and code recompilation.
+- Deliverables:
+  - Implement a configuration-driven, runtime registry for model configurations (specifying parameters, endpoint urls, and default behaviors).
+  - Create a generic model-invocation dispatch mechanism (`invoke-model`).
+  - Keep backward-compatible dynamic wrappers for existing functions.
+- Acceptance criteria:
+  - Models can be added, updated, or custom-configured at runtime without recompilation.
+- Estimation: 3-5 days
+
+### TD-016: Deprecate ambient/global state variables
+
+- Priority: P1
+- Status: `done`
+- Files in scope:
+  - `vars.lisp`
+  - `gemini-core.lisp`
+  - `gemini-chatbot.lisp`
+- Problem:
+  - Implicit globals (e.g., `*current-session*`, `*chat-persona*`, and package-level state) still drive high-level flows, introducing thread safety concerns and state leaks across chatbot sessions.
+- Deliverables:
+  - Establish a plan for complete, explicit session propagation across the main invocation stack.
+  - Progressively deprecate the global state fallbacks.
+- Acceptance criteria:
+  - Multi-session concurrency is completely isolated, predictable, and robust.
+- Estimation: 1-2 weeks
+
+### TD-017: Implement self-healing connection watchdogs for stdio MCP sub-processes
+
+- Priority: P1
+- Status: `done`
+- Files in scope:
+  - `mcp.lisp`
+  - `jsonrpc.lisp`
+- Problem:
+  - MCP stdio-based transport assumes child processes are highly stable. A single crashed, stalled, or high-latency MCP tool can lock or freeze the parent Lisp process.
+- Deliverables:
+  - Add connection heartbeat/watchdog timers to stdio transport channels.
+  - Implement automatic restart and self-healing logic for crashed or dead MCP server processes.
+- Acceptance criteria:
+  - Child process failures are isolated, log clear warnings, and self-heal automatically without thread freezes.
+- Estimation: 3-4 days
+
+### TD-018: Mock testing expansion for tool side-effects
+
+- Priority: P2
+- Status: `done`
+- Files in scope:
+  - `git-tools.lisp`
+  - `shell-tools.lisp`
+  - `filesystem-tools.lisp`
+  - `tests/misc.lisp`
+- Problem:
+  - Tool behaviors that write files, query git, or run CLI commands have sparse test isolation, risking modifications to the host environment or failing due to host configuration drift.
+- Deliverables:
+  - Implement a 100% mocked, virtualized filesystem and environment helper for the test suite.
+  - Isolate side-effecting CLI and VCS calls during testing.
+- Acceptance criteria:
+  - No side effects can leak to the host filesystem or git repositories during local test execution.
+- Estimation: 3-5 days
+
 ---
 
 ## Execution Plan (Initial)
@@ -329,15 +426,27 @@ Exit criteria:
 - Unified adapter layer.
 - Reduced system coupling.
 
+### Phase 4 (Modularization & Extension: 1-2 weeks)
+
+- TD-014
+- TD-015
+- TD-016
+- TD-017
+- TD-018
+
+Exit criteria:
+
+- Physical repository layout fully organized into subdirectories.
+- Dynamic data-driven model registry replaces macrolet static helpers.
+- Implicit ambient globals are fully deprecated in favor of explicit session propagation.
+- Watchdog monitors prevent stdio MCP socket/transport freezes.
+- Side-effect-heavy tools run inside 100% mocked test environments.
+
 ---
 
 ## Ready Queue (Start Next)
 
-1. TD-001
-2. TD-002
-3. TD-003
-4. TD-004
-5. TD-005
+None (all backlog items completed!)
 
 ## Preparation Checklist for Each Item
 

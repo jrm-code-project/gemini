@@ -26,7 +26,6 @@
                "uiop")
   :components
   ((:module "infrastructure"
-    :pathname ""
     :components
     ((:file "package")
      (:file "vars"      :depends-on ("package"))
@@ -36,7 +35,6 @@
      (:file "object"    :depends-on ("misc" "package" "vars"))))
 
    (:module "transport"
-    :pathname ""
     :depends-on ("infrastructure")
     :components
     ((:file "asdfx")
@@ -44,7 +42,6 @@
      (:file "mcp"       :depends-on ("jsonrpc"))))
 
    (:module "adapters"
-    :pathname ""
     :depends-on ("infrastructure")
     :components
     ((:file "adapter")
@@ -52,7 +49,6 @@
      (:file "gemini-openai" :depends-on ("adapter"))))
 
    (:module "tools"
-    :pathname ""
     :depends-on ("infrastructure" "transport")
     :components
     ((:file "git-tools")
@@ -73,11 +69,15 @@
                                      "misc-tools"))))
 
    (:module "orchestration"
-    :pathname ""
     :depends-on ("infrastructure" "transport" "adapters" "tools")
     :components
     ((:file "gemini-core")
-     (:file "interaction"    :depends-on ("gemini-core"))
+     (:file "lmstudio-tool-bridge" :depends-on ("gemini-core"))
+     (:file "interaction-session" :depends-on ("gemini-core"))
+     (:file "interaction" :depends-on ("gemini-core" "lmstudio-tool-bridge" "interaction-session"))
+     (:file "interaction-events" :depends-on ("interaction" "interaction-session"))
+     (:file "interaction-payloads" :depends-on ("interaction" "lmstudio-tool-bridge"))
+     (:file "interaction-transport" :depends-on ("interaction" "interaction-session" "interaction-events" "interaction-payloads"))
      (:file "gemini-personas")
      (:file "gemini-chatbot" :depends-on ("gemini-personas"))
      (:file "gemini-iridium")
@@ -90,7 +90,6 @@
                                          "interaction"))))
 
    (:module "apps"
-    :pathname ""
     :depends-on ("orchestration" "tools")
     :components
     ((:file "analyze")

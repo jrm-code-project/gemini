@@ -1,1 +1,2 @@
 
+:enable-diary-tools t

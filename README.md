@@ -48,24 +48,27 @@ You can also set the API key at runtime:
 
 Backend selection is configured per persona via that persona's `config.lisp`.
 
-Default behavior is Google Gemini API:
+Preferred backend values are symbolic:
 
 ```common-lisp
-:googleapi t
-```
+;; Google Gemini REST API
+:googleapi :google-api
 
-To use an OpenAI-compatible backend instead:
+;; Google Interactions API over SSE
+:googleapi :google-interactions-api
 
-```common-lisp
-:googleapi nil
+;; OpenAI-compatible chat completions
+:googleapi :openai-api
 :model "gpt-4o-mini"
 :url "https://api.openai.com/v1/chat/completions"
 ```
 
 Notes:
-- `:googleapi t` uses the existing Google Gemini API flow.
-- `:googleapi nil` routes requests through the OpenAI-compatible chat completions endpoint.
-- `:url` is optional. If omitted, the default is `http://localhost:1234/v1/chat/completions`.
+- `:googleapi :google-api` uses the Gemini REST API flow.
+- `:googleapi :google-interactions-api` uses the stateful Interactions API and updates the active `runtime-session` with interaction state.
+- `:googleapi :openai-api` routes requests through the OpenAI-compatible chat completions path.
+- `:url` is optional for `:openai-api`. If omitted, the default is `http://localhost:1234/v1/chat/completions`.
+- Legacy truthy / `nil` `:googleapi` values still work for compatibility, but new configs should prefer the symbolic values above.
 - OpenAI-compatible authorization is now resolved in this order:
     1. Runtime variable `gemini::*openai-authorization*` (full header value, e.g. `"Bearer <token>"`)
     2. Environment variable `OPENAI_AUTHORIZATION` (full header value)
@@ -116,12 +119,67 @@ Load the library using Quicklisp or ASDF:
 (asdf:load-system "gemini")
 ```
 
+### MCP tool lifecycle
+
+Loading the `gemini` system no longer starts MCP servers automatically.
+
+- If a persona has `:enable-mcp-tools t`, shared MCP servers are started lazily on first MCP-backed use.
+- The persona-specific memory MCP server is also created lazily rather than during `content-generator` construction.
+- If you want explicit control over process lifetime, call:
+
+```common-lisp
+(gemini:start-mcp-servers)
+;; ... use MCP-backed features ...
+(gemini:stop-mcp-servers)
+```
+
+To refresh configured servers:
+
+```common-lisp
+(gemini:restart-mcp-servers)
+```
+
+If no `~/.config/mcp/mcp.lisp` configuration file is present, these functions simply leave MCP disabled.
+
+## Testing
+
+Run the full suite from the repository root:
+
+```common-lisp
+(asdf:test-system "gemini-tests")
+```
+
+For a focused suite, load the test system and run the FiveAM suite directly:
+
+```common-lisp
+(asdf:load-system "gemini-tests")
+(fiveam:run! 'gemini-tests::interaction-payload-tests)
+```
+
+Focused suites currently include:
+
+- `gemini-tests::interaction-payload-tests` for payload normalization and serialization
+- `gemini-tests::interaction-backend-tests` for Interactions backend invocation and tool translation
+- `gemini-tests::interaction-stream-tests` for Interactions and LM Studio stream/event handling
+- `gemini-tests::lmstudio-backend-tests` for LM Studio backend and bridge behavior
+- `gemini-tests::interaction-live-tests` for opt-in live backend coverage
+
+The default `gemini-tests` run is hermetic. Live backend coverage is isolated in `interaction-live-tests` and only exercises external services when its environment gates are enabled:
+
+- `GEMINI_RUN_LIVE_INTERACTIONS_STREAM_TEST` enables live Google Interactions coverage
+- `GEMINI_RUN_LIVE_LMSTUDIO_STREAM_TEST` enables live LM Studio streaming and tool-bridge coverage
+
 ## API Overview
 
 The main exported functions are:
 
 - `gemini:invoke-gemini` — Generate text from a prompt using a fresh context.
 - `gemini:continue-gemini` — Continue a conversation with the Gemini model using the existing context.
+- `gemini:invoke-gemini-with-session` / `gemini:continue-gemini-with-session` — Run the same flows against an explicit `runtime-session` instead of relying on compatibility globals.
+- `gemini:new-chat-with-session` / `gemini:chat-with-session` — Session-first chat entry points.
+- `gemini:make-runtime-session` / `gemini:with-runtime-session` — Create and install explicit session state for multi-turn or concurrent flows.
+- `gemini:invoke-interaction-with-session` — Session-first entry point for the Google Interactions backend.
+- `gemini:start-mcp-servers` / `gemini:stop-mcp-servers` — Explicitly manage MCP server lifetime when using MCP-backed tools.
 
 See the source for additional utility functions.
 
@@ -202,12 +260,9 @@ This library was initially developed as a personal tool and, as such, contains c
     The implementation now supports per-persona switching between the Google Gemini API and OpenAI-compatible chat-completions backends. However, core conversation logic is still centered on Gemini-style internal objects and not yet a fully provider-agnostic client interface. Some provider-specific behavior (tool-calling semantics, advanced safety controls, and payload feature parity) still requires further normalization.
     *   **Roadmap:** Continue refactoring toward a generic backend abstraction layer with a common "LLM client" interface. Provider adapters (Gemini, OpenAI-compatible, and others) should each implement the same contract so core logic can remain backend-neutral.
 
-2.  **Global, Single-Threaded Conversation Context:**
-    The conversational state is managed via a global special variable (`*context*`). This model is simple and effective for linear, single-user, single-model conversations. However, it becomes unwieldy for more complex scenarios, such as:
-    *   Recursive calls to the LLM for sub-problems within a larger conversation.
-    *   Orchestrating conversations between multiple models.
-    *   Handling multi-user or multi-threaded interactions.
-    *   **Roadmap:** The plan is to refactor the context management system away from a global state. This will likely involve introducing "conversation" objects that encapsulate their own history and state. Core functions like `invoke-gemini` would be modified to operate on a specific conversation object, allowing for a multitude of parallel, independent, and nested conversations.
+2.  **Compatibility Globals Still Exist at the API Boundary:**
+    The codebase now has an explicit `runtime-session` abstraction and session-first entry points, but compatibility wrappers still synchronize legacy globals for older call sites. That means newer code can run isolated, concurrent sessions, while some older helper and app entry points still rely on the compatibility layer.
+    *   **Roadmap:** Continue pushing explicit-session entry points outward and keep shrinking the compatibility boundary so multi-session and nested orchestration flows never need ambient global state.
 
 Contributions and ideas for tackling these architectural improvements are highly encouraged.
 
@@ -220,5 +275,3 @@ Please contact me if you have questions or need help.
 
 This library uses [Dexador](https://github.com/fukamachi/dexador) for HTTP requests and [cl-json](https://github.com/hankhero/cl-json) for JSON parsing.
 ```
-
-

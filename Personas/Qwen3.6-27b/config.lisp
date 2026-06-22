@@ -1,0 +1,9 @@
+:enable-filesystem-tools         nil
+:enable-git-tools                nil
+:enable-interaction-tools        nil
+:enable-lmstudio-tools           nil
+:enable-mcp-tools                nil
+:enable-web-tools                nil
+:googleapi           :lmstudio-api
+:model               "qwen/qwen3.6-27b"
+:url                 "http://127.0.0.1:1234/api/v1/chat"
